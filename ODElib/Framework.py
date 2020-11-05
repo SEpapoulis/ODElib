@@ -267,27 +267,34 @@ class ModelFramework():
     def get_model(self):
         return(self._model)
 
-    def get_parameters(self,asdict=False):
+    def get_parameters(self,asdict=False,**kwargs):
         '''return the parameters needed for integration
         
         Parameters
         ----------
         asdict : bool, optional
             If true, return dict with parameter names mapped to values
-    
+        kwargs: optional
+            pass a mapping of parameters to be packages for value return
         Return
         ------
         parameters
-            numpy array of parameters or dict of parameters
+            numpy array of parameters ready for odeint or dict of parameters
         '''
         if asdict:
             ps = {}
             for p in self.get_pnames():
-                ps[p] = self.parameters[p]
+                if p in kwargs:
+                    ps[p] = kwargs[p]
+                else:
+                    ps[p] = self.parameters[p]
         else:
             ps = []
             for p in self.get_pnames():
-                ps.append(self.parameters[p])
+                if p in kwargs:
+                    ps.append(kwargs[p])
+                else:    
+                    ps.append(self.parameters[p])
             ps = tuple([np.r_[ps]])
         return(ps)
 
@@ -422,7 +429,7 @@ class ModelFramework():
         fs['AIC'] = self.get_AIC(fs['Chi'])
         return(fs)
     
-    def _MarkovChain(self,nits=1000,burnin=None,print_progress=True,static_pars=None):
+    def _MarkovChain(self,nits=1000,burnin=None,static_parameters=None,print_progress=True):
         '''allows option to return model solutions at sample times
 
         Parameters
@@ -431,7 +438,8 @@ class ModelFramework():
             number of iterations
         burnin : int
             number of iterations to ignore initially, Defaults to half of nits
-
+        static_parameters : list-like, optional
+            specify parameters that you do not want to change during the markov chain
         Returns
         -------
         tupple : pall, likelihoods, iterations
@@ -439,31 +447,31 @@ class ModelFramework():
         '''
         #unpacking parameters
         pnames = self.get_pnames()
-        pars = self.get_parameters()[0]
-        npars = len(pars)
         ar,ic = 0.0,0
         ars, likelihoods = np.r_[[]], np.r_[[]]
+        pars = {}
+        reject = set(static_parameters)
+        ps=self.get_parameters(asdict=True)
+        for p in ps:
+            if p not in reject:
+                try:
+                    pars[p] = np.float(ps[p])#we need to enforce dtype for computation to work
+                except TypeError:
+                    pars[p] = ps[p]
+        pars = pd.Series(pars)
+        npars = len(pars)
         opt = np.ones(npars)
         stds = np.zeros(npars) + 0.05
-        if static_pars:
-            permit=[]
-            for p in self.get_parameters()[0]:
-                if p in static_pars:
-                    permit.append(0)
-                else:
-                    permit.append(1)
-            permit = np.array(permit)
-        else:
-            permit = np.ones(npars)
-
-        
         #defining the number of iterations
         iterations = np.arange(1, nits, 1)
         if not burnin:
             burnin = int(nits/2)
         #initial prior
-        modcalc = self.integrate(predict_df=True)
-        chi = np.sum([self.get_chi(O=self.df.loc[sname]['abundance'],C=np.log(modcalc.loc[sname]['abundance']),sigma=self.df.loc[sname]['log_sigma']) for sname in self.get_snames(predict_df=True)])
+        modcalc = self.integrate(predict_df=True,parameters = self.get_parameters(**pars.to_dict()))
+        chi = np.sum([self.get_chi(O=self.df.loc[sname]['abundance'],
+                                    C=np.log(modcalc.loc[sname]['abundance']),
+                                    sigma=self.df.loc[sname]['log_sigma'])
+                    for sname in self.get_snames(predict_df=True)])
         pall = []
         #print report and update output
         pits = int(nits/10)
@@ -473,14 +481,18 @@ class ModelFramework():
         for it in iterations:
             pars_old = pars
             pars = np.exp(np.log(pars) + opt*np.random.normal(0, stds, npars))#*permit
-            modcalc = self.integrate(parameters=tuple([pars]),predict_df=True)
-            chinew = np.sum([self.get_chi(O=self.df.loc[sname]['abundance'],C=np.log(modcalc.loc[sname]['abundance']),sigma=self.df.loc[sname]['log_sigma']) for sname in self.get_snames(predict_df=True)])
+            modcalc = self.integrate(parameters = self.get_parameters(**pars.to_dict()),predict_df=True)
+            chinew = np.sum([self.get_chi(O=self.df.loc[sname]['abundance'],
+                                            C=np.log(modcalc.loc[sname]['abundance']),
+                                            sigma=self.df.loc[sname]['log_sigma']) 
+                            for sname in self.get_snames(predict_df=True)])
             likelihoods = np.append(likelihoods, chinew)
             if np.exp(chi-chinew) > np.random.rand():  # KEY STEP
                 chi = chinew
                 if it > burnin:  # only store the parameters if you've gone through the burnin period
                     pall.append(np.append(pars,
-                                            [chi,self.get_adjusted_rsquared(h,v,),it]
+                                            #[chi,self.get_adjusted_rsquared(h,v,),it]
+                                            [chi,"adjR2 placeholder",it]
                                             )
                                 )
                     ar = ar + 1.0  # acceptance ratio
