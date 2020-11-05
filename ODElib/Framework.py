@@ -74,18 +74,7 @@ class ModelFramework():
         self._vu = np.array(self.df.loc['virus']['uncertainty'])
         '''
         _is = {}#initial states
-        self.df = None
-        if not isinstance(DataFrame,type(None)):
-            self.df = self._processdf(DataFrame)
-            self.times = np.arange(0, max(self.df['time']), t_step) 
-            self._pred_tindex = {} #stores time index for predicted values
-            for pred in set(self.df.index):
-                self._pred_tindex[pred] = np.r_[[np.where(abs(a-self.times) == min(abs(a-self.times)))[0][0] for a in self.df.loc[pred]['time']]]
-            #setting the inital values
-            for org,abundance in self.df[self.df['time'] == 0]['abundance'].iteritems():
-                _is[org] = abundance
-        else:
-            self.times = np.linspace(0, t_end, t_step) 
+ 
 
         #parameter assignment
         #pnames is referenced by multilpe functions
@@ -117,6 +106,24 @@ class ModelFramework():
         else:
             self._summations_index = None
         #self._samples = self.df.loc['host']['abundance'].shape[0] + self.df.loc['virus']['abundance'].shape[0]
+
+        self.df = None
+        if not isinstance(DataFrame,type(None)):
+            self.df = self._processdf(DataFrame)
+            #self.times = np.arange(0, max(self.df['time']), max(self.df['time'])/t_step) 
+            self.times = np.linspace(0, max(self.df['time']),10000)
+            self._pred_tindex = {} #stores time index for predicted values
+            for pred in set(self.df.index):
+                if isinstance(self.df.loc[pred]['time'],pd.core.series.Series):
+                    self._pred_tindex[pred] = np.r_[[np.where(abs(a-self.times) == min(abs(a-self.times)))[0][0] for a in self.df.loc[pred]['time']]]
+                else:
+                    a = self.df.loc[pred]['time']
+                    self._pred_tindex[pred] = np.r_[np.where(abs(a-self.times) == min(abs(a-self.times)))[0][0]]
+            #setting the inital values
+            for org,abundance in self.df[self.df['time'] == 0]['abundance'].iteritems():
+                _is[org] = abundance
+        else:
+            self.times = np.linspace(0, t_end, t_step)
 
     def _processdf(self,df):
         if 'replicate' in df:
@@ -358,12 +365,15 @@ class ModelFramework():
             
             mod = np.concatenate([mod[:,keep],np.array(summed).T],axis=1)
 
-        #if predict_df:
-        #    h,v = h[self._pred_h_index],v[self._pred_v_index]
-        if as_dataframe:
+        if as_dataframe or predict_df:
             df = pd.DataFrame(mod)
             df.columns = self.get_snames(after_summation=sum_subpopulations)
-            df['t'] = self.times
+            df['time'] = self.times
+            if predict_df:
+                calc=pd.melt(df[self.get_snames(predict_df=True)+['time']],id_vars=['time'])
+                calc.columns = ['time','organism','abundance']
+                calc=calc.set_index('organism')
+                return(pd.concat([calc.loc[sname].iloc[self._pred_tindex[sname]] for sname in self.get_snames(predict_df=True)]))                
             return(df)
         return mod
 
@@ -376,7 +386,7 @@ class ModelFramework():
         #    + sum((np.log(v) - np.log(self._va)) ** 2 / \
         #            (np.log(1.0+self._vu**2.0/self._va**2.0)**0.5 ** 2)
         #            )
-        chi = np.sum( (np.log(O) - np.log(C))**2 / np.log(sigma)**2 )
+        chi = np.sum( (O - C)**2 / sigma**2 )
         return(chi)
 
     def get_rsquared(self,h,v):
@@ -412,7 +422,7 @@ class ModelFramework():
         fs['AIC'] = self.get_AIC(fs['Chi'])
         return(fs)
     
-    def _MarkovChain(self,nits=1000,burnin=None,print_progress=True):
+    def _MarkovChain(self,nits=1000,burnin=None,print_progress=True,static_pars=None):
         '''allows option to return model solutions at sample times
 
         Parameters
@@ -431,17 +441,29 @@ class ModelFramework():
         pnames = self.get_pnames()
         pars = self.get_parameters()[0]
         npars = len(pars)
-        h,v = self.integrate()
         ar,ic = 0.0,0
         ars, likelihoods = np.r_[[]], np.r_[[]]
         opt = np.ones(npars)
         stds = np.zeros(npars) + 0.05
+        if static_pars:
+            permit=[]
+            for p in self.get_parameters()[0]:
+                if p in static_pars:
+                    permit.append(0)
+                else:
+                    permit.append(1)
+            permit = np.array(permit)
+        else:
+            permit = np.ones(npars)
+
+        
         #defining the number of iterations
         iterations = np.arange(1, nits, 1)
         if not burnin:
             burnin = int(nits/2)
         #initial prior
-        chi = self.get_chi(h,v)
+        modcalc = self.integrate(predict_df=True)
+        chi = np.sum([self.get_chi(O=self.df.loc[sname]['abundance'],C=np.log(modcalc.loc[sname]['abundance']),sigma=self.df.loc[sname]['log_sigma']) for sname in self.get_snames(predict_df=True)])
         pall = []
         #print report and update output
         pits = int(nits/10)
@@ -450,9 +472,9 @@ class ModelFramework():
             print('iteration; ' 'error; ' 'acceptance ratio')
         for it in iterations:
             pars_old = pars
-            pars = np.exp(np.log(pars) + opt*np.random.normal(0, stds, npars))
-            h,v = self.integrate(parameters=tuple([pars]),forshow=False)
-            chinew = self.get_chi(h,v)
+            pars = np.exp(np.log(pars) + opt*np.random.normal(0, stds, npars))#*permit
+            modcalc = self.integrate(parameters=tuple([pars]),predict_df=True)
+            chinew = np.sum([self.get_chi(O=self.df.loc[sname]['abundance'],C=np.log(modcalc.loc[sname]['abundance']),sigma=self.df.loc[sname]['log_sigma']) for sname in self.get_snames(predict_df=True)])
             likelihoods = np.append(likelihoods, chinew)
             if np.exp(chi-chinew) > np.random.rand():  # KEY STEP
                 chi = chinew
