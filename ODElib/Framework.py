@@ -15,9 +15,9 @@ def rawstats(pdseries):
     std = ((np.exp(log_std**2)-1)*np.exp(2*log_mean+log_std**2.0))**0.5
     return(median,std)
 
-def Chain_worker(model,nits,burnin):
+def Chain_worker(model,argdict):
     '''Function called by pool for parallized fitting'''
-    posterior = model._MarkovChain(nits,burnin,False)
+    posterior = model._MarkovChain(**argdict)
     return(posterior)
 
 def Integrate_worker(model,parameters):
@@ -41,8 +41,8 @@ def predict_logsigma(sigma,mean):
 
 class ModelFramework():
 
-    def __init__(self,ODE,parameter_names=None,state_names=None,DataFrame=None,state_summations=None,
-                t_end=5,t_step=900.0 / 86400.0,**kwargs):
+    def __init__(self,ODE,parameter_names=None,state_names=None,dataframe=None,state_summations=None,
+                t_end=5,t_steps=1000,**kwargs):
         '''
         The SnI (Susceptible n-Infected) class acts a framework to facilitate and expedite the analysis
          of viral host interactions. Specifically, this class uses a Markov Chain Monte Carlo (MCMC) 
@@ -108,10 +108,11 @@ class ModelFramework():
         #self._samples = self.df.loc['host']['abundance'].shape[0] + self.df.loc['virus']['abundance'].shape[0]
 
         self.df = None
-        if not isinstance(DataFrame,type(None)):
-            self.df = self._processdf(DataFrame)
+
+        if not isinstance(dataframe,type(None)):
+            self.df = self._processdf(dataframe)
             #self.times = np.arange(0, max(self.df['time']), max(self.df['time'])/t_step) 
-            self.times = np.linspace(0, max(self.df['time']),10000)
+            self.times = np.linspace(0, max(self.df['time']),t_steps)
             self._pred_tindex = {} #stores time index for predicted values
             for pred in set(self.df.index):
                 if isinstance(self.df.loc[pred]['time'],pd.core.series.Series):
@@ -123,7 +124,7 @@ class ModelFramework():
             for org,abundance in self.df[self.df['time'] == 0]['abundance'].iteritems():
                 _is[org] = abundance
         else:
-            self.times = np.linspace(0, t_end, t_step)
+            self.times = np.linspace(0, t_end, t_steps)
 
     def _processdf(self,df):
         if 'replicate' in df:
@@ -133,8 +134,10 @@ class ModelFramework():
             dfagg['log_sigma'] = df.groupby(by=['time','organism']).std()['log_abundance']
             dfagg.reset_index('time',inplace=True)
         else:
-            df['log_abundance'] = np.log(df['abundance'])
-            df['log_sigma'] = predict_logsigma(df['sigma'],df['abundance'])
+            if 'log_abundance' not in df:
+                df['log_abundance'] = np.log(df['abundance'])
+            if 'log_sigma' not in df:
+                df['log_sigma'] = predict_logsigma(df['sigma'],df['abundance'])
             dfagg=df
         return(dfagg)
 
@@ -429,6 +432,16 @@ class ModelFramework():
         fs['AIC'] = self.get_AIC(fs['Chi'])
         return(fs)
     
+    def _rand_walk(self,pdict):
+        _pdict={}
+        stds=.05
+        for p in pdict:
+            if isinstance(pdict[p],np.ndarray):
+                _pdict[p]=np.exp(np.log(pdict[p]) + np.random.normal(0, stds,pdict[p].shape))
+            else:
+                _pdict[p]=np.exp(np.log(pdict[p]) + np.random.normal(0, stds))
+        return(_pdict) 
+
     def _MarkovChain(self,nits=1000,burnin=None,static_parameters=None,print_progress=True):
         '''allows option to return model solutions at sample times
 
@@ -450,15 +463,18 @@ class ModelFramework():
         ar,ic = 0.0,0
         ars, likelihoods = np.r_[[]], np.r_[[]]
         pars = {}
-        reject = set(static_parameters)
+        if static_parameters:
+            reject = set(static_parameters)
+        else:
+            reject = set()
         ps=self.get_parameters(asdict=True)
         for p in ps:
             if p not in reject:
-                try:
-                    pars[p] = np.float(ps[p])#we need to enforce dtype for computation to work
-                except TypeError:
-                    pars[p] = ps[p]
-        pars = pd.Series(pars)
+                pars[p] = ps[p]
+                #try:
+                #    pars[p] = np.float(ps[p])#we need to enforce dtype for computation to work
+                #except TypeError:
+                #    pars[p] = ps[p]
         npars = len(pars)
         opt = np.ones(npars)
         stds = np.zeros(npars) + 0.05
@@ -467,12 +483,13 @@ class ModelFramework():
         if not burnin:
             burnin = int(nits/2)
         #initial prior
-        modcalc = self.integrate(predict_df=True,parameters = self.get_parameters(**pars.to_dict()))
-        chi = np.sum([self.get_chi(O=self.df.loc[sname]['abundance'],
+        modcalc = self.integrate(predict_df=True,parameters = self.get_parameters(**pars))
+        chi = np.sum([self.get_chi(O=self.df.loc[sname]['log_abundance'],
                                     C=np.log(modcalc.loc[sname]['abundance']),
                                     sigma=self.df.loc[sname]['log_sigma'])
                     for sname in self.get_snames(predict_df=True)])
         pall = []
+        chis=[]
         #print report and update output
         pits = int(nits/10)
         if print_progress:
@@ -480,21 +497,18 @@ class ModelFramework():
             print('iteration; ' 'error; ' 'acceptance ratio')
         for it in iterations:
             pars_old = pars
-            pars = np.exp(np.log(pars) + opt*np.random.normal(0, stds, npars))#*permit
-            modcalc = self.integrate(parameters = self.get_parameters(**pars.to_dict()),predict_df=True)
-            chinew = np.sum([self.get_chi(O=self.df.loc[sname]['abundance'],
+            pars = self._rand_walk(pars)#permit
+            modcalc = self.integrate(parameters = self.get_parameters(**pars),predict_df=True)
+            chinew = np.sum([self.get_chi(O=self.df.loc[sname]['log_abundance'],
                                             C=np.log(modcalc.loc[sname]['abundance']),
-                                            sigma=self.df.loc[sname]['log_sigma']) 
+                                            sigma=self.df.loc[sname]['log_sigma'])
                             for sname in self.get_snames(predict_df=True)])
             likelihoods = np.append(likelihoods, chinew)
             if np.exp(chi-chinew) > np.random.rand():  # KEY STEP
                 chi = chinew
                 if it > burnin:  # only store the parameters if you've gone through the burnin period
-                    pall.append(np.append(pars,
-                                            #[chi,self.get_adjusted_rsquared(h,v,),it]
-                                            [chi,"adjR2 placeholder",it]
-                                            )
-                                )
+                    pall.append(pars)
+                    chis.append(chi)
                     ar = ar + 1.0  # acceptance ratio
                     ic = ic + 1  # total count
             else: #if chi gets worse, use old parameters
@@ -508,9 +522,12 @@ class ModelFramework():
         #pall = pall[:,:ic]
         #print_posterior_statistics(pall,pnames)
         df = pd.DataFrame(pall)
+        df['chi']=chis
+        for p in static_parameters:
+            df[p]=self.parameters[p]
         if df.empty:
             df = pd.DataFrame([[np.nan] * (len(pnames)+3)])
-        df.columns = list(pnames)+['chi','adjR2','Iteration']
+        #df.columns = list(pnames)+['chi','adjR2','Iteration']
         return df
 
     def _parallelize(self,func,args,cores):
@@ -617,7 +634,22 @@ class ModelFramework():
         df.dropna(inplace=True)
         return(df)
 
-    def MCMC(self,chain_inits=None,iterations=1000,cpu_cores=1,print_report=True):
+    def _arg_copy(self):
+        args = {}
+        args['parameter_names']=self._pnames
+        args['state_names'] = self._snames
+        for mapping in [self.istates,self.parameters]:
+            for el in mapping:
+                args[el] = mapping[el]
+        args['ODE']=self._model
+        args['t_steps'] = len(self.times)
+        args['state_summations']=self._state_summations
+        args['dataframe']=self.df
+
+        return(args)
+
+
+    def MCMC(self,chain_inits=None,iterations=1000,cpu_cores=1,static_parameters=None,print_report=True):
         '''Launches Markov Chain Monte Carlo
 
         Parameters
@@ -643,12 +675,28 @@ class ModelFramework():
 
         #package SIn with parameters set and the iterations
         #jobs = [[SnI(self.df,**inits),iterations,int(iterations/2)] for inits in chain_inits]
+        #nits=1000,burnin=None,static_parameters=None,print_progress=True
+        jobs=[]
+        MC_args={'nits':iterations,
+                'static_parameters':static_parameters,
+                'print_progress':False,
+                'burnin':int(iterations/2)}
+        if isinstance(chain_inits,int):
+            args = self._arg_copy()
+            for i in range(0,chain_inits):
+                jobs.append([ModelFramework(**args),MC_args])
+        else:
+            for inits in chain_inits:
+                args = self._arg_copy()
+                for el in inits:
+                    args[el] = inits[el]#overwritting coppied elements
+                jobs.append([ModelFramework(**args),MC_args])
+
 
         if cpu_cores == 1:
             posterior_list = []
             for job in jobs:
-                posterior_list.append(jobs[0]._MarkovChain(job[1],job[2],True))
-            
+                posterior_list.append(job[0]._MarkovChain(**job[1]))
         else:
             posterior_list=self._parallelize(Chain_worker,jobs,cpu_cores)
         
@@ -666,12 +714,12 @@ class ModelFramework():
         
         self.set_parameters(**p_median) #reset params with new fits
         
-        if print_report:
-            h,v = self.integrate(forshow=False)
-            fs = self.get_fitstats(h,v)
-            report.append("Median parameter fit stats:")
-            report.append("\tChi = {:0.3e}\n\tAdjusted R-squared = {:0.3e}\n\tAIC = {:0.3e}".format(fs['Chi'],fs['AdjR^2'],fs['AIC']))
-            print('\n'.join(report))
+        #if print_report:
+        #    h,v = self.integrate(forshow=False)
+        #    fs = self.get_fitstats(h,v)
+        #    report.append("Median parameter fit stats:")
+        #    report.append("\tChi = {:0.3e}\n\tAdjusted R-squared = {:0.3e}\n\tAIC = {:0.3e}".format(fs['Chi'],fs['AdjR^2'],fs['AIC']))
+        #    print('\n'.join(report))
 
     def gradient(self,parameter_name,p_range,intialstates=None,seed_equilibrium=True,aggregate_enpoints=False,print_status=True):
         '''
