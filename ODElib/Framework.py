@@ -17,11 +17,20 @@ def rawstats(pdseries):
 
 def Chain_worker(model,argdict):
     '''Function called by pool for parallized fitting'''
+
     posterior = model._MarkovChain(**argdict)
     return(posterior)
 
-def Integrate_worker(model,parameters):
-    mod = model.integrate(parameters=parameters,forshow=False)
+def Integrate_worker(model,parameters=None,only_timefinal=False):
+    ps = None
+    if parameters:
+        ps = model.get_parameters(**parameters)
+    mod = model.integrate(parameters=ps)
+    if parameters:
+        for p in parameters:
+            mod[p] = [parameters[p]]*len(mod)
+    if only_timefinal:
+        return (mod.iloc[-1])
     return(mod)
 
 def Fit_worker(model,parameters):
@@ -42,7 +51,7 @@ def predict_logsigma(sigma,mean):
 class ModelFramework():
 
     def __init__(self,ODE,parameter_names=None,state_names=None,dataframe=None,state_summations=None,
-                t_end=5,t_steps=1000,**kwargs):
+                t_end=5,t_steps=1000,random_seed=0,**kwargs):
         '''
         The SnI (Susceptible n-Infected) class acts a framework to facilitate and expedite the analysis
          of viral host interactions. Specifically, this class uses a Markov Chain Monte Carlo (MCMC) 
@@ -74,8 +83,8 @@ class ModelFramework():
         self._vu = np.array(self.df.loc['virus']['uncertainty'])
         '''
         _is = {}#initial states
- 
-
+        self.random_seed = random_seed
+        np.random.seed(random_seed)
         #parameter assignment
         #pnames is referenced by multilpe functions
         if parameter_names:
@@ -97,7 +106,7 @@ class ModelFramework():
             if el in self._snames:
                 _is[el] = kwargs[el] #overiding dataframe initial states
         self.set_parameters(**_ps)
-        self.set_inits(**_is)
+        
         self._model = ODE
         
         self._state_summations = state_summations
@@ -121,10 +130,13 @@ class ModelFramework():
                     a = self.df.loc[pred]['time']
                     self._pred_tindex[pred] = np.r_[np.where(abs(a-self.times) == min(abs(a-self.times)))[0][0]]
             #setting the inital values
-            for org,abundance in self.df[self.df['time'] == 0]['abundance'].iteritems():
-                _is[org] = abundance
+            for org,log_abundance in self.df[self.df['time'] == 0]['log_abundance'].iteritems():
+                if org not in _is:
+                    _is[org] = np.exp(log_abundance)# SETTING INIT TO MEDIAN, OR MEAN IN LOG!
         else:
             self.times = np.linspace(0, t_end, t_steps)
+        
+        self.set_inits(**_is)
 
     def _processdf(self,df):
         if 'replicate' in df:
@@ -260,11 +272,6 @@ class ModelFramework():
             if not np.any(np.isnan(dlog)):
                 results.append(np.r_[row,dlog.sum()])
         df = pd.DataFrame(results)
-        print(df)
-        df.columns = self.get_snames() + ['sum_dlog']
-        if set_best:
-            i = df['sum_dlog'].idxmin()
-            self.istates = df.loc[i][self.get_snames()].to_dict()
         return(df)
 
     def get_model(self):
@@ -298,14 +305,14 @@ class ModelFramework():
                     ps.append(kwargs[p])
                 else:    
                     ps.append(self.parameters[p])
-            ps = tuple([np.r_[ps]])
+            ps = tuple([ps])
         return(ps)
 
     def get_numstatevar(self):
         '''returns the number of state varaibles'''
         return(len(self._snames))
 
-    def _lhs_samples(self,var_mapping,samples,**kwargs):
+    def _lhs_samples(self,var_mapping,samples):#,**kwargs):
         '''Sample parameter space using a Latin Hyper Cube sampling scheme
 
         Parameters
@@ -315,22 +322,34 @@ class ModelFramework():
             for if the parameter can only be positive, and a bool for if the draws should
             be negativly exponentiated 
         '''
-
-        lhd = lhs(len(var_mapping), samples=samples)
+        #must enumerate the number of parameters (i.e., total non-zero elements among arrays)
+        #TODO: pass array of priors if parameters are stored in an array
+        total_ps = 0
+        for p in var_mapping:
+            nump = np.count_nonzero(self.parameters[p])
+            total_ps+=nump
+        lhd = lhs(total_ps, samples=samples)
         var_samples = {}
-        for i,el in enumerate(var_mapping):
-            samples= lhd[:,i]
-            dist,exponentiate=var_mapping[el]
-            samples = dist.ppf(lhd[:,i])
-            if exponentiate:
-                samples = np.power(10,samples)
-            var_samples[el] = samples
-        
-        for el in kwargs:
-            var_samples[el] = kwargs[el]
-        df = pd.DataFrame(var_samples)
-        #parameter name mapped to init
+        lhd_i=0
+        for p in var_mapping:
+            nump = np.count_nonzero(self.parameters[p])
+            samples = lhd[:,lhd_i:lhd_i+nump]
+            lhd_i+=nump
+            dist,lambda_trans=var_mapping[p]
+            samples = dist.ppf(samples)
+            if lambda_trans:
+                samples = lambda_trans(samples)
+            if nump == 1:
+                var_samples[p] = samples
+            else:
+                _sample = []
+                _p = self.parameters[p]
+                for row in samples:
+                    _p[np.where(_p!=0)] = row
+                    _sample.append( np.copy(_p) )
+                var_samples[p] = _sample
 
+        df = pd.DataFrame(var_samples)
         return(df)
 
     def integrate(self,inits=None,parameters=None,predict_df=False,as_dataframe=True,sum_subpopulations=True):
@@ -356,7 +375,7 @@ class ModelFramework():
             initials=list(self.get_inits())
         else:
             initials = inits
-        if isinstance(parameters,type(None)):
+        if not parameters:
             ps = self.get_parameters()
         else:
             ps = parameters
@@ -524,7 +543,10 @@ class ModelFramework():
         df = pd.DataFrame(pall)
         df['chi']=chis
         for p in static_parameters:
-            df[p]=self.parameters[p]
+            if isinstance(self.parameters[p],np.ndarray):
+                df[p] = [self.parameters[p] for el in range(0,len(df))]
+            else:
+                df[p]=self.parameters[p]
         if df.empty:
             df = pd.DataFrame([[np.nan] * (len(pnames)+3)])
         #df.columns = list(pnames)+['chi','adjR2','Iteration']
@@ -560,7 +582,7 @@ class ModelFramework():
         print("Starting {} processes with {} cores\t[DONE]".format(len(args),cores))
         return(results)
 
-    def explore_paramspace(self,samples=1000,cpu_cores=1,**kwargs):
+    def explore_paramspace(self,samples=1000,cpu_cores=1,aggregate_endpoints=True,**kwargs):
         '''search parameter space for good initial parameter values
 
         Parameters
@@ -583,20 +605,25 @@ class ModelFramework():
 
         '''
         print("Sampling with a Latin Hypercube scheme")
-        inits = self._lhs_samples(samples,**kwargs)
+        ps = self._lhs_samples(kwargs,samples)
+        jobs=[]
+        for i,row in ps.iterrows():
+            mod = self.copy()
+            jobs.append([mod,row.to_dict(),aggregate_endpoints])
         #packaging SIn instances with different parameters from LHS sampling
-        args = [[self,tuple((tuple(ps),))] for ps in inits[self.get_pnames()].itertuples(index=False)]
+        #args = [[self,tuple((tuple(ps),))] for ps in inits[self.get_pnames()].itertuples(index=False)]
         if cpu_cores ==1:
             results = []
-            for arg in args:
-                results.append(Integrate_worker(arg[0],arg[1]))
+            for job in jobs:
+                results.append(Integrate_worker(job[0],job[1],job[2]))
         else:                
-            results = self._parallelize(Integrate_worker,args,cores=cpu_cores)
-        #df=pd.DataFrame(results)
-        #df.columns = self.get_pnames()+['chi']
-        #df.dropna(inplace=True)
+            results = self._parallelize(Integrate_worker,jobs,cores=cpu_cores)
+        if aggregate_endpoints:
+            results = pd.DataFrame(results)
+        return(results)
         #return(df)
 
+    #BROKEN
     def search_initparamfits(self,samples=1000,cpu_cores=1,**kwargs):
         '''search parameter space for good initial parameter values
 
@@ -645,8 +672,10 @@ class ModelFramework():
         args['t_steps'] = len(self.times)
         args['state_summations']=self._state_summations
         args['dataframe']=self.df
-
         return(args)
+
+    def copy(self):
+        return(ModelFramework(**self._arg_copy()))
 
 
     def MCMC(self,chain_inits=None,iterations=1000,cpu_cores=1,static_parameters=None,print_report=True):
@@ -684,7 +713,7 @@ class ModelFramework():
         if isinstance(chain_inits,int):
             args = self._arg_copy()
             for i in range(0,chain_inits):
-                jobs.append([ModelFramework(**args),MC_args])
+                jobs.append([ModelFramework(random_seed=i,**args),MC_args])
         else:
             for inits in chain_inits:
                 args = self._arg_copy()
@@ -705,15 +734,22 @@ class ModelFramework():
             posterior_list[i]['chain#']=i
         posterior = pd.concat(posterior_list)
         posterior.reset_index(drop=True,inplace=True)
-        p_median= {}
-        report=["\nFitting Report\n==============="]
-        for col in list(self.get_pnames()):
-            median,std = rawstats(posterior[col])
-            report.append("parameter: {}\n\tmedian = {:0.3e}, Standard deviation = {:0.3e}".format(col,median,std))
-            p_median[col]=median
+        #setting medians
+        p_median = {}
+        for p in self.get_pnames():
+            if p not in static_parameters:
+                p_median[p] = np.exp(np.log(np.array(posterior[p].to_list()).mean(axis=0)))
+
+        self.set_parameters(**p_median)
+        #p_median= {}
+        #report=["\nFitting Report\n==============="]
+        #for col in list(self.get_pnames()):
+        #    median,std = rawstats(posterior[col])
+        #    report.append("parameter: {}\n\tmedian = {:0.3e}, Standard deviation = {:0.3e}".format(col,median,std))
+        #    p_median[col]=median
         
-        self.set_parameters(**p_median) #reset params with new fits
-        
+        #self.set_parameters(**p_median) #reset params with new fits
+        return(posterior)
         #if print_report:
         #    h,v = self.integrate(forshow=False)
         #    fs = self.get_fitstats(h,v)
