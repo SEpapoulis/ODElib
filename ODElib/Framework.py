@@ -5,7 +5,7 @@ import multiprocessing
 from scipy.stats import truncnorm,norm,uniform
 from pyDOE2 import lhs
 from . import distributions
-
+import matplotlib.pyplot as plt
 
 def rawstats(pdseries):
     '''calculates raw median and standard deviation of posterior'''
@@ -17,36 +17,38 @@ def rawstats(pdseries):
 
 def Chain_worker(model,argdict):
     '''Function called by pool for parallized fitting'''
-
     posterior = model._MarkovChain(**argdict)
     return(posterior)
 
-def Integrate_worker(model,parameters=None,only_timefinal=False):
-    ps = None
-    if parameters:
-        ps = model.get_parameters(**parameters)
-    mod = model.integrate(parameters=ps)
-    if parameters:
-        for p in parameters:
-            mod[p] = [parameters[p]]*len(mod)
+def Integrate_worker(model,parameter_list=list(),only_timefinal=False):
+    results = []
+    for ps in parameter_list:
+        mod = model.integrate(parameters=model.get_parameters(**ps))
+        for p in ps:#document parameters in dataframe
+            mod[p]=[ps[p]]*len(mod)
+        if only_timefinal:
+            results.append(mod.iloc[-1])
+        else:
+            results.append(mod.iloc[-1])
     if only_timefinal:
-        return (mod.iloc[-1])
-    return(mod)
+        results = pd.DataFrame(results)
+    return(results)
 
-def Fit_worker(model,parameters):
-    mod = model.integrate(parameters=parameters,forshow=False)
-    chi = mod.get_chi(mod)
-    ps = list(parameters[0])
-    ps.append(chi)
-    return(ps)
+def Fit_worker(model,parameter_list=list()):
+    fits = []
+    for ps in parameter_list:
+        modcalc = model.integrate(parameters = (ps,),predict_obs=True,as_dataframe=False)
+        chi = model.get_chi(modcalc)
+        fits.append(list(ps)+[chi])
+    return(fits)
 
 def predict_logsigma(sigma,mean):
     '''
     This function predicts the log transformed standard deviation from
     the mean and standard devation of untransformed data
     '''
-    s = np.log(1.0+(sigma**2.0/mean**2.0))**0.5
-    return(s)
+    return(np.log(1.0+sigma**2.0/mean**2.0)**0.5)
+    
 
 class ModelFramework():
 
@@ -119,39 +121,65 @@ class ModelFramework():
         self.df = None
 
         if not isinstance(dataframe,type(None)):
-            self.df = self._processdf(dataframe)
+            self.df = self._processdf(dataframe.copy())
             #self.times = np.arange(0, max(self.df['time']), max(self.df['time'])/t_step) 
-            self.times = np.linspace(0, max(self.df['time']),t_steps)
-            self._pred_tindex = {} #stores time index for predicted values
+            #REMOVE COMMENT LATER
+            #self.times = np.linspace(0, max(self.df['time']),t_steps)
+            self.times = np.arange(0, 3, 900.0 / 86400.0) 
+            _pred_tindex = {} #stores time index for predicted values
             for pred in set(self.df.index):
                 if isinstance(self.df.loc[pred]['time'],pd.core.series.Series):
-                    self._pred_tindex[pred] = np.r_[[np.where(abs(a-self.times) == min(abs(a-self.times)))[0][0] for a in self.df.loc[pred]['time']]]
+                    _pred_tindex[pred] = np.r_[[np.where(abs(a-self.times) == min(abs(a-self.times)))[0][0] for a in self.df.loc[pred]['time']]]
                 else:
                     a = self.df.loc[pred]['time']
-                    self._pred_tindex[pred] = np.r_[np.where(abs(a-self.times) == min(abs(a-self.times)))[0][0]]
+                    _pred_tindex[pred] = np.r_[np.where(abs(a-self.times) == min(abs(a-self.times)))[0][0]]
+            #we must reorder _pred_tindex to match self.snames, then assigned in self
+            self._pred_tindex = {}
+            for sname in self._snames:
+                if sname in _pred_tindex:
+                    self._pred_tindex[sname] = _pred_tindex[sname]
             #setting the inital values
-            for org,log_abundance in self.df[self.df['time'] == 0]['log_abundance'].iteritems():
+            for org,abundance in self.df[self.df['time'] == 0]['abundance'].iteritems():
                 if org not in _is:
-                    _is[org] = np.exp(log_abundance)# SETTING INIT TO MEDIAN, OR MEAN IN LOG!
+                    _is[org] = np.exp(np.log(abundance))# SETTING INIT TO MEDIAN, OR MEAN IN LOG!
+            #pulling observations from df and storing in dictionary for easy computation
+            #self._obs_logabundance = {}
+            #self._obs_logsigma = {}
+            #self._obs_abundance = {}
+            self._samples=len(self.df)
+            #for sname in self.get_snames(predict_obs=True):
+                #self._obs_logabundance[sname] = np.array(self.df.loc[sname]['log_abundance'])
+                #self._obs_logsigma[sname] = np.array(self.df.loc[sname]['log_sigma'])
+                #self._obs_abundance[sname] = np.array(self.df.loc[sname]['abundance'])
+                #self._samples+= self.df.loc[sname]['abundance'].shape[0]
         else:
             self.times = np.linspace(0, t_end, t_steps)
         
         self.set_inits(**_is)
+        
+        
+        
 
     def _processdf(self,df):
+        self._obs_logabundance = {}
+        self._obs_logsigma = {}
+        self._obs_abundance = {}
+        #THIS IF STATEMENT IS BROKEN WITH REPLICATES
         if 'replicate' in df:
             df = df[['time','abundance']]
             df['log_abundance'] = np.log(df['abundance'])
-            dfagg = df.groupby(by=['time','organism']).mean()
-            dfagg['log_sigma'] = df.groupby(by=['time','organism']).std()['log_abundance']
-            dfagg.reset_index('time',inplace=True)
-        else:
-            if 'log_abundance' not in df:
-                df['log_abundance'] = np.log(df['abundance'])
-            if 'log_sigma' not in df:
-                df['log_sigma'] = predict_logsigma(df['sigma'],df['abundance'])
-            dfagg=df
-        return(dfagg)
+            df = df.groupby(by=['time','organism']).mean()
+            #dfagg['log_sigma'] = df.groupby(by=['time','organism']).std()['log_abundance']
+            #dfagg.reset_index('time',inplace=True)
+        
+        for sname in self._snames:
+            if sname in df.index:
+                self._obs_abundance[sname] = df.loc[sname]['abundance'].to_numpy()
+                self._obs_logabundance[sname] = np.log(df.loc[sname]['abundance'].to_numpy())
+                self._obs_logsigma[sname]=predict_logsigma(sigma = df.loc[sname]['sigma'].to_numpy(),
+                                                            mean = df.loc[sname]['abundance'].to_numpy())
+
+        return(df)
 
     def _get_summation_index(self):
         sumpop_sumi = {}
@@ -169,7 +197,7 @@ class ModelFramework():
         '''returns the names of the parameters used in the current model'''
         return(self._pnames)
 
-    def get_snames(self,after_summation=False,predict_df=False):
+    def get_snames(self,after_summation=False,predict_obs=False):
         '''returns the names of the state variables used in the current model'''
         if after_summation and self._state_summations:
             snames = []
@@ -183,7 +211,7 @@ class ModelFramework():
                     snames.append(pop)
             snames.extend(summed_pops)
             return(snames)
-        elif predict_df:
+        elif predict_obs:
             return(list(self._pred_tindex.keys()))
         else:
             return(self._snames)
@@ -240,6 +268,7 @@ class ModelFramework():
         inits = np.array([self.istates[el] for el in self.get_snames()])
         return(inits)
     
+    #BROKEN!
     def find_inits(self,var_dist=dict(),set_best=True,step=1,**kwargs):
         '''get the initial state variable values for integration
 
@@ -340,7 +369,7 @@ class ModelFramework():
             if lambda_trans:
                 samples = lambda_trans(samples)
             if nump == 1:
-                var_samples[p] = samples
+                var_samples[p] = np.concatenate(samples,axis=None)
             else:
                 _sample = []
                 _p = self.parameters[p]
@@ -348,11 +377,10 @@ class ModelFramework():
                     _p[np.where(_p!=0)] = row
                     _sample.append( np.copy(_p) )
                 var_samples[p] = _sample
-
         df = pd.DataFrame(var_samples)
         return(df)
 
-    def integrate(self,inits=None,parameters=None,predict_df=False,as_dataframe=True,sum_subpopulations=True):
+    def integrate(self,inits=None,parameters=None,predict_obs=False,as_dataframe=True,sum_subpopulations=True):
         '''allows option to return model solutions at sample times
 
         Parameters
@@ -361,7 +389,7 @@ class ModelFramework():
             ignore h0 and v0 in data and set the initial values for integration
         parameters : numpy.array, optional
             ignore stored parameters and use specified
-        predict_df : bool
+        predict_obs : bool
             If true, only time points in df will be returned
 
         Returns
@@ -394,20 +422,67 @@ class ModelFramework():
             
             mod = np.concatenate([mod[:,keep],np.array(summed).T],axis=1)
 
-        if as_dataframe or predict_df:
+        if as_dataframe:#this operation is expensive, avoid during iteration
             df = pd.DataFrame(mod)
             df.columns = self.get_snames(after_summation=sum_subpopulations)
             df['time'] = self.times
-            if predict_df:
-                calc=pd.melt(df[self.get_snames(predict_df=True)+['time']],id_vars=['time'])
+            if predict_obs:
+                calc=pd.melt(df[self.get_snames(predict_obs=True)+['time']],id_vars=['time'])
                 calc.columns = ['time','organism','abundance']
                 calc=calc.set_index('organism')
-                return(pd.concat([calc.loc[sname].iloc[self._pred_tindex[sname]] for sname in self.get_snames(predict_df=True)]))                
+                return(pd.concat([calc.loc[sname].iloc[self._pred_tindex[sname]] for sname in self.get_snames(predict_obs=True)]))                
             return(df)
-        return mod
+        else:
+            if predict_obs:
+                mod_d = {}
+                for i,sname in enumerate(self.get_snames(predict_obs=True)):
+                    mod_d[sname] = mod[:,i][self._pred_tindex[sname]]#getting predicted values
+                return(mod_d)
+            return mod
 
+    def get_chi4(self,prediction_dict):
+        '''calculate chi values from predicted values'''
+        chis={}
+        sigmas = {}
+        for sname in prediction_dict:
+            #print(np.log(1.0+self.df.loc[sname]['sigma']**2.0/self.df.loc[sname]['abundance']**2.0)**0.5)
+            #print(predict_logsigma(self.df.loc[sname]['sigma'].to_numpy(),
+            #                        self.df.loc[sname]['abundance'].to_numpy()))
+            s1=predict_logsigma(self.df.loc[sname]['sigma'].to_numpy(),
+                                    self.df.loc[sname]['abundance'].to_numpy())
+            chi1 = (np.log(prediction_dict[sname]) - self._obs_logabundance[sname]) ** 2 / s1**2
 
-    def get_chi(self,O,C,sigma):
+            s2=np.log(1.0+self.df.loc[sname]['sigma'].to_numpy()**2.0/self.df.loc[sname]['abundance'].to_numpy()**2.0)**0.5                 
+            chi2 = (np.log(prediction_dict[sname]) - self._obs_logabundance[sname]) ** 2 /  s2**2
+
+            sigmas[sname]=[s1,s2]
+            chis[sname]= [chi1,chi2]
+        return(chis,sigmas)
+
+    def get_chi(self,prediction_dict):
+        '''calculate chi values from predicted values'''
+        chis=[]
+        for sname in prediction_dict:
+            chi = sum((np.log(prediction_dict[sname]) - self._obs_logabundance[sname]) ** 2 / \
+                        (np.log(1.0+self.df.loc[sname]['sigma']**2.0/self.df.loc[sname]['abundance']**2.0)**0.5 ** 2)
+                        ) 
+            
+            chis.append(chi)
+        return(sum(chis))
+        
+    def get_chi2(self,prediction_dict):
+        '''calculate chi values from predicted values'''
+        
+        S = sum((np.log(prediction_dict['S']) - np.log(self.df.loc['S']['abundance'])) ** 2 / \
+                    (np.log(1.0+self.df.loc['S']['sigma']**2.0/self.df.loc['S']['abundance']**2.0)**0.5 ** 2)
+                    ) 
+        V= sum((np.log(prediction_dict['V']) - np.log(self.df.loc['V']['abundance'])) ** 2 / \
+                    (np.log(1.0+self.df.loc['V']['sigma']**2.0/self.df.loc['V']['abundance']**2.0)**0.5 ** 2)
+                    )
+        print(S)
+        print(V)
+        return(S+V)
+    def get_chi1(self,prediction_dict):
         '''calculate chi values from predicted values'''
         #chi = sum((np.log(h) - np.log(self._ha)) ** 2 / \
         #            (np.log(1.0+self._hu**2.0/self._ha**2.0)**0.5 ** 2)
@@ -415,21 +490,33 @@ class ModelFramework():
         #    + sum((np.log(v) - np.log(self._va)) ** 2 / \
         #            (np.log(1.0+self._vu**2.0/self._va**2.0)**0.5 ** 2)
         #            )
-        chi = np.sum( (O - C)**2 / sigma**2 )
-        return(chi)
+        chis = []
+        for sname in prediction_dict:
+            #print(sname)
+            O = self._obs_logabundance[sname]
+            #print(O)
+            C = np.log(prediction_dict[sname])
+            #print(C)
+            sigma = self._obs_logsigma[sname]
+            #print(sigma)
+            chi=sum( ((O - C)**2.0) / (sigma**2.0) )
+            chis.append(chi)
+            print(chi)
+        return(sum(chis))
 
-    def get_rsquared(self,h,v):
+    def get_rsquared(self,prediction_dict):
         '''calculate R^2'''
-        ssres = sum((h - self._ha) ** 2) \
-            + sum((v - self._va) ** 2)
-        sstot = h.shape[0]*np.var(self._ha) \
-            + v.shape[0]*np.var(self._va)
-        return 1 - ssres / sstot
+        ssres=0
+        sstot=0
+        for sname in prediction_dict:
+            ssres+=(prediction_dict[sname]-self._obs_abundance[sname])**2
+            sstot+= prediction_dict[sname].shape[0] * np.var(self._obs_abundance[sname])
+        return (1 - ssres / sstot)
 
 
-    def get_adjusted_rsquared(self,h,v):
+    def get_adjusted_rsquared(self,prediction_dict):
         '''calculate adjusted R^2'''
-        R2 = self.get_rsquared(h,v)
+        R2 = self.get_rsquared(prediction_dict)
         n = self._samples
         p = len(self.get_pnames())
         adjR2 = 1 - (1-R2)*(n-1)/(n-p-1)
@@ -441,16 +528,17 @@ class ModelFramework():
         AIC = -2*np.log(np.exp(-chi)) + 2*K
         return(AIC)
 
-    def get_fitstats(self,h=None,v=None):
+    def get_fitstats(self,prediction_dict=dict()):
         '''return dictionary of adjusted R-squared, Chi, and AIC of current parameters'''
         fs = {}
-        if isinstance(h,type(None)) or isinstance(v,type(None)):
-            h,v = self.integrate(predict_df=True)
-        fs['Chi'] = self.get_chi(h,v)
-        fs['AdjR^2'] = self.get_adjusted_rsquared(h,v)
+        if not prediction_dict:
+            prediction_dict = self.integrate(predict_obs=True)
+        fs['Chi'] = self.get_chi(prediction_dict)
+        fs['AdjR^2'] = self.get_adjusted_rsquared(prediction_dict)
         fs['AIC'] = self.get_AIC(fs['Chi'])
         return(fs)
     
+    #FIX ME?
     def _rand_walk(self,pdict):
         _pdict={}
         stds=.05
@@ -461,7 +549,7 @@ class ModelFramework():
                 _pdict[p]=np.exp(np.log(pdict[p]) + np.random.normal(0, stds))
         return(_pdict) 
 
-    def _MarkovChain(self,nits=1000,burnin=None,static_parameters=None,print_progress=True):
+    def _MarkovChain(self,nits=1000,burnin=None,static_parameters=list(),print_progress=True):
         '''allows option to return model solutions at sample times
 
         Parameters
@@ -502,11 +590,8 @@ class ModelFramework():
         if not burnin:
             burnin = int(nits/2)
         #initial prior
-        modcalc = self.integrate(predict_df=True,parameters = self.get_parameters(**pars))
-        chi = np.sum([self.get_chi(O=self.df.loc[sname]['log_abundance'],
-                                    C=np.log(modcalc.loc[sname]['abundance']),
-                                    sigma=self.df.loc[sname]['log_sigma'])
-                    for sname in self.get_snames(predict_df=True)])
+        modcalc = self.integrate(predict_obs=True,as_dataframe=False,parameters = self.get_parameters(**pars))
+        chi = self.get_chi(modcalc)
         pall = []
         chis=[]
         #print report and update output
@@ -517,11 +602,8 @@ class ModelFramework():
         for it in iterations:
             pars_old = pars
             pars = self._rand_walk(pars)#permit
-            modcalc = self.integrate(parameters = self.get_parameters(**pars),predict_df=True)
-            chinew = np.sum([self.get_chi(O=self.df.loc[sname]['log_abundance'],
-                                            C=np.log(modcalc.loc[sname]['abundance']),
-                                            sigma=self.df.loc[sname]['log_sigma'])
-                            for sname in self.get_snames(predict_df=True)])
+            modcalc = self.integrate(predict_obs=True,as_dataframe=False,parameters = self.get_parameters(**pars))
+            chinew = self.get_chi(modcalc)
             likelihoods = np.append(likelihoods, chinew)
             if np.exp(chi-chinew) > np.random.rand():  # KEY STEP
                 chi = chinew
@@ -553,7 +635,7 @@ class ModelFramework():
         return df
 
     def _parallelize(self,func,args,cores):
-        '''Parallelized Markov Chains
+        '''Wrapper for Parallelization of jobs
         
         Parameters
         ----------
@@ -568,7 +650,7 @@ class ModelFramework():
         Returns
         -------
         list
-            list of outputs from func
+            list of outputs from funcself
         
         '''
         if cores > multiprocessing.cpu_count():
@@ -582,8 +664,23 @@ class ModelFramework():
         print("Starting {} processes with {} cores\t[DONE]".format(len(args),cores))
         return(results)
 
+    def _package_parameters(self,num_workers,parameter_dataframe):
+        '''Takes a parameter dataframe and distributes among workerlist '''
+        #ensure all parameters are in the dataframe
+        parameter_names = self.get_pnames()
+        for p in parameter_names:
+            if p not in parameter_dataframe:
+                parameter_dataframe[p] = [self.parameters[p]]*len(parameter_dataframe)
+        parameter_dataframe=parameter_dataframe[parameter_names]#ensure order is correct
+        worklist=[list() for i in range(0,num_workers)]
+        for i,row in parameter_dataframe.iterrows():#distributing jobs among workers
+            worklist[i%num_workers].append(tuple(row))
+        return(worklist)
+
+
+
     def explore_paramspace(self,samples=1000,cpu_cores=1,aggregate_endpoints=True,**kwargs):
-        '''search parameter space for good initial parameter values
+        '''Launch 
 
         Parameters
         ----------
@@ -606,20 +703,17 @@ class ModelFramework():
         '''
         print("Sampling with a Latin Hypercube scheme")
         ps = self._lhs_samples(kwargs,samples)
+        worklist=self._package_parameters(cpu_cores,ps)
         jobs=[]
-        for i,row in ps.iterrows():
-            mod = self.copy()
-            jobs.append([mod,row.to_dict(),aggregate_endpoints])
-        #packaging SIn instances with different parameters from LHS sampling
-        #args = [[self,tuple((tuple(ps),))] for ps in inits[self.get_pnames()].itertuples(index=False)]
+        while worklist:
+            jobs.append([self.copy(),worklist.pop(),aggregate_endpoints])
         if cpu_cores ==1:
             results = []
             for job in jobs:
                 results.append(Integrate_worker(job[0],job[1],job[2]))
         else:                
             results = self._parallelize(Integrate_worker,jobs,cores=cpu_cores)
-        if aggregate_endpoints:
-            results = pd.DataFrame(results)
+        results = pd.concat(results)
         return(results)
         #return(df)
 
@@ -647,19 +741,23 @@ class ModelFramework():
 
         '''
         print("Sampling with a Latin Hypercube scheme")
-        inits = self._lhs_samples(samples,**kwargs)
-        #packaging SIn instances with different parameters from LHS sampling
-        args = [[self,tuple((tuple(ps),))] for ps in inits[self.get_pnames()].itertuples(index=False)]
+        ps = self._lhs_samples(kwargs,samples)
+        worklist = self._package_parameters(cpu_cores,ps)
+        jobs=[]
+        while worklist:
+            jobs.append([self.copy(),worklist.pop()])
         if cpu_cores ==1:
             results = []
-            for arg in args:
-                results.append(Fit_worker(arg[0],arg[1]))
+            for job in jobs:
+                results.append(Fit_worker(job[0],job[1]))
         else:                
-            results = self._parallelize(Fit_worker,args,cores=cpu_cores)
-        df=pd.DataFrame(results)
-        df.columns = self.get_pnames()+['chi']
-        df.dropna(inplace=True)
-        return(df)
+            results = self._parallelize(Fit_worker,jobs,cores=cpu_cores)
+        fits=[]
+        for workerfit in results:
+            fits.extend(workerfit)
+        fitdf=pd.DataFrame(fits,columns = self.get_pnames()+['chi'])
+        return(fitdf)
+        
 
     def _arg_copy(self):
         args = {}
@@ -678,7 +776,7 @@ class ModelFramework():
         return(ModelFramework(**self._arg_copy()))
 
 
-    def MCMC(self,chain_inits=None,iterations=1000,cpu_cores=1,static_parameters=None,print_report=True):
+    def MCMC(self,chain_inits=None,iterations=1000,cpu_cores=1,static_parameters=list(),print_report=True):
         '''Launches Markov Chain Monte Carlo
 
         Parameters
@@ -821,4 +919,27 @@ class ModelFramework():
     #        m.append(el.iloc[-1])
     #    return(pd.DataFrame(m))
 
+
+
+    def plot(self,states=None,overlay=dict()):
+        if not states:
+            states = self.get_snames(predict_obs=True)
+        rplt = (len(states)%2+len(states)) /2
+        f,ax = plt.subplots(int(rplt),2,figsize=[9,4.5])
+        mod = self.integrate()
+        for i,state in enumerate(states):
+            if state in self.df.index:
+                ax[i].errorbar(self.df.loc[state]['time'],
+                            self.df.loc[state]['abundance'],
+                            yerr=self.df.loc[state]['sigma']
+                            )
+            ax[i].set_xlabel('Time')
+            ax[i].set_ylabel(state+' ml$^{-1}$')
+            ax[i].semilogy()
+            if state in mod:
+                ax[i].plot(self.times,mod[state])
+                if state in overlay:
+                    for el in overlay[state]:
+                        ax[i].plot(self.times,mod[el])
+        return(f,ax)
 
