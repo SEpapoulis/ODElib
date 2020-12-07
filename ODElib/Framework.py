@@ -19,19 +19,21 @@ def Chain_worker(model,argdict):
     posterior = model._MarkovChain(**argdict)
     return(posterior)
 
-def Integrate_worker(model,parameter_list=list(),only_timefinal=False):
+def Equilibrium_worker(model,parameter_list=list()):
+    '''
+    Currently, this worker is not smart enough to determine if the system has reached equilibrium yet or not
+    '''
     results = []
     for ps in parameter_list:
-        mod = model.integrate(parameters=model.get_parameters(**ps))
-        for p in ps:#document parameters in dataframe
-            mod[p]=[ps[p]]*len(mod)
-        if only_timefinal:
-            results.append(mod.iloc[-1])
-        else:
-            results.append(mod.iloc[-1])
-    if only_timefinal:
-        results = pd.DataFrame(results)
-    return(results)
+        #mod = model.integrate(parameters=model.get_parameters(**ps))
+        mod = model.integrate(parameters=(ps,),as_dataframe=False,sum_subpopulations=False)
+        eq = list(mod[-1,:])#storing final value
+        eq.extend(ps)#
+        results.append(eq)
+    cols = model.get_snames()
+    cols.extend(model.get_pnames())
+    df = pd.DataFrame(results,columns=cols)
+    return(df)
 
 def Fit_worker(model,parameter_list=list()):
     fits = []
@@ -148,22 +150,31 @@ class ModelFramework():
         self._obs_logabundance = {}
         self._obs_logsigma = {}
         self._obs_abundance = {}
-        df = df.sort_values(by=['organism','time'])
-        df.set_index('organism',inplace=True)
-        #THIS IF STATEMENT IS BROKEN WITH REPLICATES
+        df=df.sort_values(by=['organism','time'])
         if 'replicate' in df:
-            df = df[['time','abundance']]
-            df['log_abundance'] = np.log(df['abundance'])
-            df = df.groupby(by=['time','organism']).mean()
-            #dfagg['log_sigma'] = df.groupby(by=['time','organism']).std()['log_abundance']
-            #dfagg.reset_index('time',inplace=True)
+            _df = df[['organism','time','abundance']]
+            _df['log_abundance'] = np.log(_df['abundance'])
+            dfagg = _df.groupby(by=['time','organism']).mean()
+            dfagg['log_sigma'] = _df.groupby(by=['time','organism']).std()['log_abundance']
+            dfagg=dfagg.reset_index(level='time')
+            for sname in self._snames:
+                if sname in dfagg.index:
+                    self._obs_abundance[sname] = dfagg.loc[sname]['abundance'].to_numpy()
+                    self._obs_logabundance[sname] = dfagg.loc[sname]['log_abundance'].to_numpy()
+                    self._obs_logsigma[sname] = dfagg.loc[sname]['log_sigma'].to_numpy()
+            df = dfagg
         else:
+            df = df.set_index('organism')
             for sname in self._snames:
                 if sname in df.index:
                     self._obs_abundance[sname] = df.loc[sname]['abundance'].to_numpy()
                     self._obs_logabundance[sname] = np.log(df.loc[sname]['abundance'].to_numpy())
-                    self._obs_logsigma[sname] = stats.predict_logsigma(sigma = df.loc[sname]['sigma'].to_numpy(),
-                                                                mean = df.loc[sname]['abundance'].to_numpy())
+                    if sname not in self._obs_logsigma:
+                        if 'log_sigma' in df:
+                            self._obs_logsigma[sname] = df.loc[sname]['log_sigma'].to_numpy()
+                        else:
+                            self._obs_logsigma[sname] = stats.predict_logsigma(sigma = df.loc[sname]['sigma'].to_numpy(),
+                                                                                mean = df.loc[sname]['abundance'].to_numpy())                    
         return(df)
 
     def _get_summation_index(self):
@@ -180,7 +191,7 @@ class ModelFramework():
 
     def get_pnames(self):
         '''returns the names of the parameters used in the current model'''
-        return(self._pnames)
+        return(self._pnames.copy())
 
     def get_snames(self,after_summation=False,predict_obs=False):
         '''returns the names of the state variables used in the current model'''
@@ -199,7 +210,7 @@ class ModelFramework():
         elif predict_obs:
             return(list(self._pred_tindex.keys()))
         else:
-            return(self._snames)
+            return(self._snames.copy())
 
 
     def __repr__(self):
@@ -392,7 +403,7 @@ class ModelFramework():
             ps = self.get_parameters()
         else:
             ps = parameters
-        mod = odeint(func,initials,self.times,args=ps)
+        mod = odeint(func,y0=initials,t=self.times,args=ps)
 
         #subpopulation summations
         if sum_subpopulations and self._summations_index:
@@ -420,8 +431,9 @@ class ModelFramework():
         else:
             if predict_obs:
                 mod_dict = {}
-                for i,sname in enumerate(self.get_snames(predict_obs=True)):
-                    mod_dict[sname]=mod[:,i][self._pred_tindex[sname]]#getting predicted values
+                for i,sname in enumerate(self.get_snames()):
+                    if sname in self._pred_tindex:
+                        mod_dict[sname]=mod[:,i][self._pred_tindex[sname]]#getting predicted values
                 return(mod_dict)
             return mod
 
@@ -604,7 +616,7 @@ class ModelFramework():
 
 
 
-    def explore_paramspace(self,samples=1000,cpu_cores=1,aggregate_endpoints=True,**kwargs):
+    def explore_equilibriums(self,samples=1000,cpu_cores=1,**parameter_mapping):
         '''Launch 
 
         Parameters
@@ -627,17 +639,17 @@ class ModelFramework():
 
         '''
         print("Sampling with a Latin Hypercube scheme")
-        ps = self._lhs_samples(kwargs,samples)
+        ps = self._lhs_samples(parameter_mapping,samples)
         worklist=self._package_parameters(cpu_cores,ps)
         jobs=[]
         while worklist:
-            jobs.append([self.copy(),worklist.pop(),aggregate_endpoints])
+            jobs.append([self.copy(),worklist.pop()])
         if cpu_cores ==1:
             results = []
             for job in jobs:
-                results.append(Integrate_worker(job[0],job[1],job[2]))
+                results.append(Equilibrium_worker(job[0],job[1]))
         else:                
-            results = self._parallelize(Integrate_worker,jobs,cores=cpu_cores)
+            results = self._parallelize(Equilibrium_worker,jobs,cores=cpu_cores)
         results = pd.concat(results)
         return(results)
         #return(df)
@@ -694,7 +706,10 @@ class ModelFramework():
         args['ODE']=self._model
         args['t_steps'] = len(self.times)
         args['state_summations']=self._state_summations
-        args['dataframe']=self.df.reset_index()
+        if isinstance(self.df,type(None)):
+            args['dataframe']=None
+        else:
+            args['dataframe']=self.df.reset_index()
         return(args)
 
     def copy(self):
@@ -750,7 +765,6 @@ class ModelFramework():
                     args[el] = inits[el]#overwritting coppied elements
                 jobs.append([ModelFramework(**args),MC_args])
 
-
         if cpu_cores == 1:
             posterior_list = []
             for job in jobs:
@@ -770,14 +784,13 @@ class ModelFramework():
                 p_median[p] = np.exp(np.log(np.array(posterior[p].to_list()).mean(axis=0)))
         print("Setting parameters to median of posterior")
         self.set_parameters(**p_median)
-        p_median= {}
-        report=["\nFitting Report\n==============="]
-        for col in list(self.get_pnames()):
-            median,std = rawstats(posterior[col])
-            report.append("parameter: {}\n\tmedian = {:0.3e}, Standard deviation = {:0.3e}".format(col,median,std))
-            p_median[col]=median
-
         if print_report:
+            p_median= {}
+            report=["\nFitting Report\n==============="]
+            for col in list(self.get_pnames()):
+                median,std = rawstats(posterior[col])
+                report.append("parameter: {}\n\tmedian = {:0.3e}, Standard deviation = {:0.3e}".format(col,median,std))
+                p_median[col]=median
             mod = self.integrate(predict_obs=True,as_dataframe=False)
             fs = self.get_fitstats(mod)
             report.append("\nMedian parameter fit stats:")
@@ -804,6 +817,7 @@ class ModelFramework():
         steps : int
             How many steps should be taken per t
         seed : bool, optional   
+        '''
         if isinstance(intialstates,type(None)):
             init = intialstates
         else:
@@ -817,24 +831,37 @@ class ModelFramework():
             if print_status:
                 print("{:.2f}% Complete".format(i/num_sim*100),end='\r')
             self.parameters[parameter_name] = p
-            temp = self.integrate(inits=init,as_dataframe=True,sum_subpopulations=False)
-            temp[parameter_name]=p
+            #temp is an numpy array
+            temp = self.integrate(inits=init,as_dataframe=False,sum_subpopulations=False)
+            #temp[parameter_name]=p
             if seed_equilibrium:
-                last=np.array(temp.iloc[-1][self.get_snames(after_summation=False)])
-                init = np.clip(last,a_min=1,a_max=None)#set init floor at 1
+                last=temp[-1,:]
+                init = np.clip(last,a_min=.001,a_max=None)#set init floor at 1
             if aggregate_enpoints:
-                temp = temp.iloc[-1]            
-            results.append(temp)
-        if aggregate_enpoints:
-            results = pd.DataFrame(results)
-            results.drop('t',axis=1,inplace=True)
-        if self._state_summations:#doing the summation last
-            for sumpop in self._state_summations:
-                results[sumpop] = results[self._state_summations[sumpop]].sum(axis=1)
-                results.drop(self._state_summations[sumpop],inplace=True,axis=1)
+                temp=temp[-1,:]#get last element
+                result = np.zeros(temp.shape[0]+1)#make new array
+                result[:-1]=temp#fill array with final states
+                result[-1] = p #add parameter value in last array
+            else:
+                shape = list(temp.shape) #get the array shape
+                shape[-1] += 1 #grow by one column at the end
+                result = np.zeros((shape)) #create new array
+                result[:,:-1] = temp #fill array with previous data
+                result[:,-1] = p #fill final column with parameter value
+            results.append(result)
+        #if aggregate_enpoints:
+            #results = pd.DataFrame(results)
+            #results.drop('t',axis=1,inplace=True)
+        #if self._state_summations:#doing the summation last
+        #    for sumpop in self._state_summations:
+        #        results[sumpop] = results[self._state_summations[sumpop]].sum(axis=1)
+        #        results.drop(self._state_summations[sumpop],inplace=True,axis=1)
         if print_status:
             print("100.00% Complete")
         self.parameters[parameter_name] = old_p
+        col = self.get_snames()
+        col.append(parameter_name)
+        results = pd.DataFrame(results,columns=col)
         return(results)
 
     #def find_endpoints(results):
