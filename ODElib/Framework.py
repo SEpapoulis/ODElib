@@ -35,6 +35,7 @@ def Equilibrium_worker(model,parameter_list=list()):
     df = pd.DataFrame(results,columns=cols)
     return(df)
 
+
 def Fit_worker(model,parameter_list=list()):
     fits = []
     for ps in parameter_list:
@@ -117,8 +118,8 @@ class ModelFramework():
             self.df = self._processdf(dataframe.copy())
             #self.times = np.arange(0, max(self.df['time']), max(self.df['time'])/t_step) 
             #REMOVE COMMENT LATER
-            #self.times = np.linspace(0, max(self.df['time']),t_steps)
-            self.times = np.arange(0, 3, 900.0 / 86400.0) 
+            self.times = np.linspace(0, max(self.df['time']),t_steps)
+            #self.times = np.arange(0, 3, 900.0 / 86400.0) 
             _pred_tindex = {} #stores time index for predicted values
             for pred in set(self.df.index):
                 if isinstance(self.df.loc[pred]['time'],pd.core.series.Series):
@@ -571,7 +572,7 @@ class ModelFramework():
         #df.columns = list(pnames)+['chi','adjR2','Iteration']
         return df
 
-    def _parallelize(self,func,args,cores):
+    def _parallelize(self,func,args,cores,print_stmt=True):
         '''Wrapper for Parallelization of jobs
         
         Parameters
@@ -593,12 +594,14 @@ class ModelFramework():
         if cores > multiprocessing.cpu_count():
             Warning("More cores specified than avalible, cpu_cores set to maximum avalible\n")
             cores=multiprocessing.cpu_count()
-        print("Starting {} processes with {} cores".format(len(args),cores),end='\r')
+        if print_stmt:
+            print("Starting {} processes with {} cores".format(len(args),cores),end='\r')
         with multiprocessing.Pool(processes=cores) as pool:
             results = pool.starmap(func,args)
         pool.join()
         pool.close()
-        print("Starting {} processes with {} cores\t[DONE]".format(len(args),cores))
+        if print_stmt:
+            print("Starting {} processes with {} cores\t[DONE]".format(len(args),cores))
         return(results)
 
     def _package_parameters(self,num_workers,parameter_dataframe):
