@@ -4,7 +4,7 @@ from scipy.integrate import odeint
 import multiprocessing
 from pyDOE2 import lhs
 import matplotlib.pyplot as plt
-from .Statistics import stats
+from .Statistics import stats,Samplers
 
 def rawstats(pdseries):
     '''calculates raw median and standard deviation of posterior'''
@@ -16,7 +16,7 @@ def rawstats(pdseries):
 
 def Chain_worker(model,argdict):
     '''Function called by pool for parallized fitting'''
-    posterior = model._MarkovChain(**argdict)
+    posterior = Samplers.MetropolisHastings(model,**argdict)
     return(posterior)
 
 def Equilibrium_worker(model,parameter_list=list()):
@@ -43,6 +43,45 @@ def Fit_worker(model,parameter_list=list()):
         chi = model.get_chi(modcalc)
         fits.append(list(ps)+[chi])
     return(fits)
+
+class parameter:
+    def __init__(self,initials,stats_gen=None,hyperparameters=None,name=None):
+        self.val = np.array(initials) #store values as ndarray
+        self.dist=stats_gen #scipy distribution
+        self.hp=hyperparameters #store hyperparameters for shaping dist
+        self.name=name
+        self._dim = self.val.shape #shape of val
+    def rwalk(self,std=.05):
+        stds=np.full(self._dim,std)
+        if self.dist:
+            logp=self.dist.logcdf(self.val,**self.hp)
+            #here, we are taking the logcdf, adding a random var,
+            #then exp to get ready for percent point function
+            pp = np.exp(logp+np.random.normal(0,stds))
+            self.val=self.dist.ppf(pp,**self.hp)
+        else:
+            #unconstrained random walk
+            self.val = np.exp(np.log(self.val)+np.random.normal(0,stds))
+    def has_distribution(self):
+        '''
+        If there is a distribution 
+        '''
+        if self.dist:
+            return(True)
+        else:
+            return(False)
+    def __repr__(self):
+        '''pretty printing'''
+        outstr = [str(self.val)]
+        if self.dist:
+            outstr.append("\n\t\tdistribution:{}, ".format(self.dist.name))
+            outstr.append("hyperparameters:{}".format(str(self.hp)))
+        return(' '.join(outstr))
+    def __str__(self):
+        return(self.__repr__())
+
+
+
 
 class ModelFramework():
 
@@ -240,7 +279,18 @@ class ModelFramework():
         pset = set(self._pnames) #sets are faster when checking membership!
         for p in kwargs:
             if p in pset:
-                self.parameters[p] = kwargs[p]
+                #if this parameter is being passed as ODElib.parameter, assign the whole datastructure
+                if isinstance(kwargs[p],parameter):
+                    self.parameters[p] = kwargs[p]
+                    if not self.parameters[p].name:
+                        self.parameters[p].name = p
+                else:
+                    #if this parameter has already been initialized, just change val and leave distribution
+                    if self.parameters[p]:
+                        self.parameters[p].val = kwargs[p]
+                    #This parameter has not been assigned, make parameter datastructure
+                    else:
+                        self.parameters[p] = parameter(kwargs[p],None,None,p)
             else:
                 raise Exception("{} is an unknown parameter. Acceptable parameters are: {}".format(p,', '.join(self._pnames)))
 
@@ -287,7 +337,7 @@ class ModelFramework():
         if missing:
             raise ValueError("Distributions or specific values were not provided for {}".format(', '.join(missing)))
         
-        inits = self._lhs_samples(var_dist,samples=10000,**kwargs) #inits is a dataframe
+        inits = self._lhs_samples(samples=10000,**kwargs) #inits is a dataframe
         
         ps = self.get_parameters()
         results = []
@@ -301,6 +351,9 @@ class ModelFramework():
         return(df)
 
     def get_model(self):
+        '''
+        return the ODE function used for integration
+        '''
         return(self._model)
 
     def get_parameters(self,asdict=False,**kwargs):
@@ -323,14 +376,14 @@ class ModelFramework():
                 if p in kwargs:
                     ps[p] = kwargs[p]
                 else:
-                    ps[p] = self.parameters[p]
+                    ps[p] = self.parameters[p].val
         else:
             ps = []
             for p in self.get_pnames():
                 if p in kwargs:
                     ps.append(kwargs[p])
                 else:    
-                    ps.append(self.parameters[p])
+                    ps.append(self.parameters[p].val)
             ps = tuple([ps])
         return(ps)
 
@@ -338,8 +391,8 @@ class ModelFramework():
         '''returns the number of state varaibles'''
         return(len(self._snames))
 
-    def _lhs_samples(self,var_mapping,samples):#,**kwargs):
-        '''Sample parameter space using a Latin Hyper Cube sam.5**2pling scheme
+    def _lhs_samples(self,samples=100):#,**kwargs):
+        '''Sample parameter space using a Latin Hyper Cube sampling scheme
 
         Parameters
         ----------
@@ -350,32 +403,20 @@ class ModelFramework():
         '''
         #must enumerate the number of parameters (i.e., total non-zero elements among arrays)
         #TODO: pass array of priors if parameters are stored in an array
-        total_ps = 0
-        for p in var_mapping:
-            nump = np.count_nonzero(self.parameters[p])
-            total_ps+=nump
-        lhd = lhs(total_ps, samples=samples)
-        var_samples = {}
-        lhd_i=0
-        for p in var_mapping:
-            nump = np.count_nonzero(self.parameters[p])
-            samples = lhd[:,lhd_i:lhd_i+nump]
-            lhd_i+=nump
-            dist,lambda_trans=var_mapping[p]
-            samples = dist.ppf(samples)
-            if lambda_trans:
-                samples = lambda_trans(samples)
-            if nump == 1:
-                var_samples[p] = np.concatenate(samples,axis=None)
+        pdists = {}
+        pstatic={}
+        for p in self.parameters:
+            #we can only do LHS samples on parameters that have distribuitons
+            if self.parameters[p].has_distribution():
+                pdists[p] = self.parameters[p]
             else:
-                _sample = []
-                _p = self.parameters[p]
-                for row in samples:
-                    _p[np.where(_p!=0)] = row
-                    _sample.append( np.copy(_p) )
-                var_samples[p] = _sample
-        df = pd.DataFrame(var_samples)
+                pstatic[p]=self.parameters[p].val    
+        df = Samplers.sample_lhs(parameter_dict=pdists,samples=samples)
+        #add parameters that do not have distributions
+        for p in pstatic:
+            df[p]=pstatic[p]
         return(df)
+
 
     def integrate(self,inits=None,parameters=None,predict_obs=False,as_dataframe=True,sum_subpopulations=True):
         '''allows option to return model solutions at sample times
@@ -487,91 +528,7 @@ class ModelFramework():
                 _pdict[p]=np.exp(np.log(pdict[p]) + np.random.normal(0, stds))
         return(_pdict) 
 
-    def _MarkovChain(self,nits=1000,burnin=None,static_parameters=list(),print_progress=True):
-        '''allows option to return model solutions at sample times
-
-        Parameters
-        ----------
-        nits : int
-            number of iterations
-        burnin : int
-            number of iterations to ignore initially, Defaults to half of nits
-        static_parameters : list-like, optional
-            specify parameters that you do not want to change during the markov chain
-        Returns
-        -------
-        tupple : pall, likelihoods, iterations
-            host and virus counts
-        '''
-        #unpacking parameters
-        pnames = self.get_pnames()
-        ar,ic = 0.0,0
-        ars, likelihoods = np.r_[[]], np.r_[[]]
-        pars = {}
-        if static_parameters:
-            reject = set(static_parameters)
-        else:
-            reject = set()
-        ps=self.get_parameters(asdict=True)
-        for p in ps:
-            if p not in reject:
-                pars[p] = ps[p]
-                #try:
-                #    pars[p] = np.float(ps[p])#we need to enforce dtype for computation to work
-                #except TypeError:
-                #    pars[p] = ps[p]
-        npars = len(pars)
-        opt = np.ones(npars)
-        stds = np.zeros(npars) + 0.05
-        #defining the number of iterations
-        iterations = np.arange(1, nits, 1)
-        if not burnin:
-            burnin = int(nits/2)
-        #initial prior
-        modcalc = self.integrate(predict_obs=True,as_dataframe=False,parameters = self.get_parameters(**pars))
-        chi = self.get_chi(modcalc)
-        pall = []
-        chis=[]
-        #print report and update output
-        pits = int(nits/10)
-        if print_progress:
-            print('a priori error', chi)
-            print('iteration; ' 'error; ' 'acceptance ratio')
-        for it in iterations:
-            pars_old = pars
-            pars = self._rand_walk(pars)#permit
-            modcalc = self.integrate(predict_obs=True,as_dataframe=False,parameters = self.get_parameters(**pars))
-            chinew = self.get_chi(modcalc)
-            likelihoods = np.append(likelihoods, chinew)
-            if np.exp(chi-chinew) > np.random.rand():  # KEY STEP
-                chi = chinew
-                if it > burnin:  # only store the parameters if you've gone through the burnin period
-                    pall.append(pars)
-                    chis.append(chi)
-                    ar = ar + 1.0  # acceptance ratio
-                    ic = ic + 1  # total count
-            else: #if chi gets worse, use old parameters
-                pars = pars_old
-            if (it % pits == 0) and print_progress:
-                print(it,';', round(chi,2),';', ar/pits)
-                ars = np.append(ars, ar/pits)
-                ar = 0.0
-        likelihoods = likelihoods[burnin:]
-        iterations = iterations[burnin:]
-        #pall = pall[:,:ic]
-        #print_posterior_statistics(pall,pnames)
-        df = pd.DataFrame(pall)
-        df['chi']=chis
-        for p in static_parameters:
-            if isinstance(self.parameters[p],np.ndarray):
-                df[p] = [self.parameters[p] for el in range(0,len(df))]
-            else:
-                df[p]=self.parameters[p]
-        if df.empty:
-            df = pd.DataFrame([[np.nan] * (len(pnames)+3)])
-        #df.columns = list(pnames)+['chi','adjR2','Iteration']
-        return df
-
+    
     def _parallelize(self,func,args,cores,print_stmt=True):
         '''Wrapper for Parallelization of jobs
         
@@ -719,7 +676,7 @@ class ModelFramework():
         return(ModelFramework(**self._arg_copy()))
 
 
-    def MCMC(self,chain_inits=None,iterations_per_chain=1000,cpu_cores=1,static_parameters=list(),print_report=True):
+    def MCMC(self,chain_inits=1,iterations_per_chain=1000,cpu_cores=1,static_parameters=list(),print_report=True):
         '''Launches Markov Chain Monte Carlo
 
         A Markov Chain Monte Carlo fitting protocol is used to find best fits. Note that chains can only be computed
@@ -771,7 +728,7 @@ class ModelFramework():
         if cpu_cores == 1:
             posterior_list = []
             for job in jobs:
-                posterior_list.append(job[0]._MarkovChain(**job[1]))
+                posterior_list.append(Samplers.MetropolisHastings(job[0],**job[1]))
         else:
             posterior_list=self._parallelize(Chain_worker,jobs,cpu_cores)
         
@@ -876,7 +833,12 @@ class ModelFramework():
     #        m.append(el.iloc[-1])
     #    return(pd.DataFrame(m))
 
-
+    def _calc_stds(self,state):
+        logabundance = self._obs_logabundance[state]
+        logstd = self._obs_logsigma[state]
+        low = np.exp(logabundance) - np.exp(logabundance-logstd) 
+        high = np.exp(logabundance+logstd) - np.exp(logabundance)
+        return(np.array([low,high]))
 
     def plot(self,states=None,overlay=dict()):
         if not states:
@@ -888,7 +850,7 @@ class ModelFramework():
             if state in self.df.index:
                 ax[i].errorbar(self.df.loc[state]['time'],
                             self.df.loc[state]['abundance'],
-                            yerr=self.df.loc[state]['sigma']
+                            yerr=self._calc_stds(state)
                             )
             ax[i].set_xlabel('Time')
             ax[i].set_ylabel(state+' ml$^{-1}$')
