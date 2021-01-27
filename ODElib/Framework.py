@@ -42,7 +42,8 @@ def Fit_worker(model,parameter_list=list()):
         modcalc = model.integrate(parameters = (ps,),predict_obs=True,as_dataframe=False)
         chi = model.get_chi(modcalc)
         fits.append(list(ps)+[chi])
-    return(fits)
+    df_fits = pd.DataFrame(fits,columns=model.get_pnames()+['chi'])
+    return(df_fits)
 
 class parameter:
     def __init__(self,initials,stats_gen=None,hyperparameters=None,name=None):
@@ -51,8 +52,12 @@ class parameter:
         self.hp=hyperparameters #store hyperparameters for shaping dist
         self.name=name
         self._dim = self.val.shape #shape of val
-    def rwalk(self,std=.05):
+    def rwalk(self,std=.1):
+        '''
+        STEP SIZE SHOULD BE TUNED FOR ACCEPTANCE RATIO OF 30%-50%
+        '''
         stds=np.full(self._dim,std)
+        #self.val = np.exp(np.log(self.val)+np.random.normal(0,stds))
         if self.dist:
             logp=self.dist.logcdf(self.val,**self.hp)
             #here, we are taking the logcdf, adding a random var,
@@ -77,10 +82,24 @@ class parameter:
             outstr.append("\n\t\tdistribution:{}, ".format(self.dist.name))
             outstr.append("hyperparameters:{}".format(str(self.hp)))
         return(' '.join(outstr))
+
+    def get_figure(self,samples=1000,logspace=False):
+        '''
+        returns a matplotlib Figure
+        '''
+        s = pd.Series(self.dist.rvs(size=samples,**self.hp))
+        if logspace:
+            axessubplot = s.hist(bins=np.logspace(np.log10(s.min()),np.log10(s.max()), 50))
+            axessubplot.figure.gca().set_xscale("log")
+        else:
+            axessubplot = s.hist(bins=np.linspace(s.min(),s.max(), 50))
+        axessubplot.set_title(self.name)
+
+        return(axessubplot.figure)
+
+
     def __str__(self):
         return(self.__repr__())
-
-
 
 
 class ModelFramework():
@@ -119,7 +138,7 @@ class ModelFramework():
         '''
         _is = {}#initial states
         self.random_seed = random_seed
-        np.random.seed(random_seed)
+        
         #parameter assignment
         #pnames is referenced by multilpe functions
         if parameter_names:
@@ -155,10 +174,7 @@ class ModelFramework():
 
         if not isinstance(dataframe,type(None)):
             self.df = self._processdf(dataframe.copy())
-            #self.times = np.arange(0, max(self.df['time']), max(self.df['time'])/t_step) 
-            #REMOVE COMMENT LATER
             self.times = np.linspace(0, max(self.df['time']),t_steps)
-            #self.times = np.arange(0, 3, 900.0 / 86400.0) 
             _pred_tindex = {} #stores time index for predicted values
             for pred in set(self.df.index):
                 if isinstance(self.df.loc[pred]['time'],pd.core.series.Series):
@@ -214,7 +230,10 @@ class ModelFramework():
                             self._obs_logsigma[sname] = df.loc[sname]['log_sigma'].to_numpy()
                         else:
                             self._obs_logsigma[sname] = stats.predict_logsigma(sigma = df.loc[sname]['sigma'].to_numpy(),
-                                                                                mean = df.loc[sname]['abundance'].to_numpy())                    
+                                                                                mean = df.loc[sname]['abundance'].to_numpy()
+                                                                                )
+                                                                                        
+
         return(df)
 
     def _get_summation_index(self):
@@ -574,6 +593,23 @@ class ModelFramework():
             worklist[i%num_workers].append(tuple(row))
         return(worklist)
 
+    def fit_survey(self,samples=1000,cpu_cores=1):
+        '''
+        samples prior distribuiton with LHS scheme for fits
+        '''
+        ps = self._lhs_samples(samples)
+        worklist=self._package_parameters(cpu_cores,ps)
+        jobs=[]
+        while worklist:
+            jobs.append([self.copy(),worklist.pop()])
+        if cpu_cores ==1:
+            results = []
+            for job in jobs:
+                results.append(Fit_worker(job[0],job[1]))
+        else:                
+            results = self._parallelize(Fit_worker,jobs,cores=cpu_cores)
+        results = pd.concat(results)
+        return(results)
 
 
     def explore_equilibriums(self,samples=1000,cpu_cores=1,**parameter_mapping):
@@ -599,7 +635,7 @@ class ModelFramework():
 
         '''
         print("Sampling with a Latin Hypercube scheme")
-        ps = self._lhs_samples(parameter_mapping,samples)
+        ps = self._lhs_samples(samples)
         worklist=self._package_parameters(cpu_cores,ps)
         jobs=[]
         while worklist:
@@ -656,10 +692,24 @@ class ModelFramework():
         return(fitdf)
         
 
-    def _arg_copy(self):
+    def _arg_copy(self,overwrite=dict()):
+        '''
+        get a copy of all arguemnts used to construct ModelFramework
+
+        Parameters
+        ----------
+        overwrite : dict
+            overwrite arguments with a dictionary mapping argument to values
+        
+        Return
+        ------
+        args
+            dictionary of argument names mapped to 
+        '''
         args = {}
         args['parameter_names']=self._pnames
         args['state_names'] = self._snames
+        #copying inital states and parameters to args
         for mapping in [self.istates,self.parameters]:
             for el in mapping:
                 args[el] = mapping[el]
@@ -670,10 +720,13 @@ class ModelFramework():
             args['dataframe']=None
         else:
             args['dataframe']=self.df.reset_index()
+        if overwrite:
+            for key in overwrite:
+                args[key] = overwrite[key]
         return(args)
 
-    def copy(self):
-        return(ModelFramework(**self._arg_copy()))
+    def copy(self,overwrite=dict()):
+        return(ModelFramework(**self._arg_copy(overwrite)))
 
 
     def MCMC(self,chain_inits=1,iterations_per_chain=1000,cpu_cores=1,static_parameters=list(),print_report=True):
@@ -710,14 +763,27 @@ class ModelFramework():
         #jobs = [[SnI(self.df,**inits),iterations,int(iterations/2)] for inits in chain_inits]
         #nits=1000,burnin=None,static_parameters=None,print_progress=True
         jobs=[]
+        
         MC_args={'nits':iterations_per_chain,
                 'static_parameters':static_parameters,
                 'print_progress':False,
                 'burnin':int(iterations_per_chain/2)}
+        #if passing a integer, user is not specifying inits ps for chains. We will pick by finding startpoints
+        #where integration does not fail by calling fit_survey
         if isinstance(chain_inits,int):
-            args = self._arg_copy()
+            #quickly explore parameter space using LHS
+            fitsurvey = self.fit_survey(cpu_cores=cpu_cores)
+            #removing parameter draws that cause integration failures
+            fitsurvey.dropna(inplace=True)
+            if fitsurvey.empty:#fit survey is empty (due to no ps to sample or VERY bad priors)
+                #create a dummy datastrucutre so arguments are not overwritten
+                initps=pd.DataFrame([[]]*chain_inits)
+            else:
+                #sample number of chains lower than median chi
+                initps = fitsurvey[fitsurvey['chi']<fitsurvey['chi'].quantile(q=.05)].sample(chain_inits)
             for i in range(0,chain_inits):
-                jobs.append([ModelFramework(random_seed=i,**args),MC_args])
+                args = self._arg_copy(overwrite=initps.iloc[i].to_dict())#get a copy of arguments with parameters overwritten
+                jobs.append([ModelFramework(random_seed=i,**args),MC_args])#setting a new random seed per chain
         else:
             for inits in chain_inits:
                 args = self._arg_copy()
