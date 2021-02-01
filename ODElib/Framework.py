@@ -46,12 +46,45 @@ def Fit_worker(model,parameter_list=list()):
     return(df_fits)
 
 class parameter:
+    '''Parameter used in ModelFramework class
+
+    The parameter class is used by the ModelFramework class to 
+    initialize parameters. The goal of this class is to easily 
+    maintain a parameter value, the underlying distribution of the parameter,
+    and hyperparameters for defining the distribution. Moreover, this
+    class is responsible for defining the random walks during MCMC fittings,
+    therefore, any parameter-specifc random walks can be fully customized.
+
+    Parameters
+    ----------
+    initials : float
+        initial value of the parameter
+    stats_gen : scipy.stats.rv_continuous or scipy.stats.rv_discrete
+        An instance of a scipy.stats.rv_continuous or scipy.stats.rv_discrete that can
+        be call typical statistical functions (pdf/pmf, cdf, ppf, ect.).
+    hyperparameters : dict
+        A dictionary mapping hyperparameter names (indicated by the scipy distribution)
+        to their values
+    name : str
+        the name of the parameter
+    
+    '''
     def __init__(self,initials,stats_gen=None,hyperparameters=None,name=None):
         self.val = np.array(initials) #store values as ndarray
         self.dist=stats_gen #scipy distribution
         self.hp=hyperparameters #store hyperparameters for shaping dist
         self.name=name
         self._dim = self.val.shape #shape of val
+        
+    def valprob(self,val=None):
+        if self.dist:
+            if val:
+                return(self.dist.pdf(val,**self.hp))
+            else:
+                return(self.dist.pdf(self.val,**self.hp))
+        else:
+            return(1.0)
+            
     def rwalk(self,std=.1):
         '''
         STEP SIZE SHOULD BE TUNED FOR ACCEPTANCE RATIO OF 30%-50%
@@ -67,6 +100,7 @@ class parameter:
         else:
             #unconstrained random walk
             self.val = np.exp(np.log(self.val)+np.random.normal(0,stds))
+
     def has_distribution(self):
         '''
         If there is a distribution 
@@ -75,6 +109,7 @@ class parameter:
             return(True)
         else:
             return(False)
+
     def __repr__(self):
         '''pretty printing'''
         outstr = [str(self.val)]
@@ -97,7 +132,6 @@ class parameter:
 
         return(axessubplot.figure)
 
-
     def __str__(self):
         return(self.__repr__())
 
@@ -107,15 +141,34 @@ class ModelFramework():
     def __init__(self,ODE,parameter_names=None,state_names=None,dataframe=None,state_summations=None,
                 t_end=5,t_steps=1000,random_seed=0,**kwargs):
         '''
-        The SnI (Susceptible n-Infected) class acts a framework to facilitate and expedite the analysis
-         of viral host interactions. Specifically, this class uses a Markov Chain Monte Carlo (MCMC) 
-         implementation to fit and generate posterior distributions of those parameters. Several 
-         functions have been included to provide arguments for scipy.integrate.odeint
+        The ModelFramweork class acts to facilitate and expedite the analysis of different ODEs
+        given some experimental data. Specifically, this class uses a Markov Chain Monte Carlo (MCMC) 
+        implementation to fit and generate posterior distributions of those parameters.
 
         Parameters
         ----------
-        dataframe : pandas.DataFrame
-            A dataframe indexed by organism with fields time, abundance, and uncertainty
+        ODE : function
+            A callable ODE function with the arguments y, t, and ps. y is the argument for an array 
+            of state variables that must match the function output. t is the argument for the time 
+            array. ps is the argument for an array of parameters.
+        parameter_names : list of str
+            A list of strings should be specified containing the names of each parameter. The order
+            of the parameters MUST match the unpacking order of the ps argument in the ODE function.
+        state_names : list of str
+            A list of strings should be specified containing the names of each state variable. The
+            order of the state variable names MUST match the unpacking order of the y argument in 
+            the ODE function.
+        dataframe : pandas.DataFrame, optional
+            A dataframe specifying the data for the model to be fit to. Dataframe columns must be
+            specifed in one of two ways: 1) Dataframes contain the columns 'organism', 'time',
+            'abundance', and 'variance' or 2) Dataframes contain the columns 'organism', 'time',
+            'abundance', and 'replicate'. Option 1 assumes the user has appropriately calculated
+            the variance and mean abundance at each timepoint for each species, while option 2 will
+            automatically calculate the variance and means. organism names must corrospond to the
+            state_names so fittings can be matched to the appropriate datapoints
+        state_summations : dict, optional
+             
+            
         Infection_states : int
             Number of infected states of host
         '''
