@@ -463,7 +463,7 @@ class ModelFramework():
         '''returns the number of state varaibles'''
         return(len(self._snames))
 
-    def _lhs_samples(self,samples=100):#,**kwargs):
+    def _lhs_samples(self,samples=100,**kwargs):
         '''Sample parameter space using a Latin Hyper Cube sampling scheme
 
         Parameters
@@ -479,7 +479,9 @@ class ModelFramework():
         pstatic={}
         for p in self.parameters:
             #we can only do LHS samples on parameters that have distribuitons
-            if self.parameters[p].has_distribution():
+            if p in kwargs:#allows samples without overwrite
+                pdists[p] = kwargs[p]
+            elif self.parameters[p].has_distribution():
                 pdists[p] = self.parameters[p]
             else:
                 pstatic[p]=self.parameters[p].val    
@@ -688,7 +690,7 @@ class ModelFramework():
 
         '''
         print("Sampling with a Latin Hypercube scheme")
-        ps = self._lhs_samples(samples)
+        ps = self._lhs_samples(samples,**parameter_mapping)
         worklist=self._package_parameters(cpu_cores,ps)
         jobs=[]
         while worklist:
@@ -768,6 +770,7 @@ class ModelFramework():
                 args[el] = mapping[el]
         args['ODE']=self._model
         args['t_steps'] = len(self.times)
+        args['t_end'] = self.times[-1]
         args['state_summations']=self._state_summations
         if isinstance(self.df,type(None)):
             args['dataframe']=None
