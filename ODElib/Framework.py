@@ -134,11 +134,17 @@ class parameter:
 
     def __str__(self):
         return(self.__repr__())
+    def copy(self):
+        return(parameter(initials=self.val,
+                        stats_gen=self.dist,
+                        hyperparameters=self.hp,
+                        name=self.name)
+                )
 
 
 class ModelFramework():
 
-    def __init__(self,ODE,parameter_names=None,state_names=None,dataframe=None,state_summations=None,
+    def __init__(self,ODE,parameter_names,state_names,dataframe=None,state_summations=None,
                 t_end=5,t_steps=1000,random_seed=0,**kwargs):
         '''
         The ModelFramweork class acts to facilitate and expedite the analysis of different ODEs
@@ -167,44 +173,26 @@ class ModelFramework():
             automatically calculate the variance and means. organism names must corrospond to the
             state_names so fittings can be matched to the appropriate datapoints
         state_summations : dict, optional
-             
-            
-        Infection_states : int
-            Number of infected states of host
+            A dictionary mapping a representative name to the summation of ODE state variables.
+        t_end : int
+            Final timepoint of integration. If a dataframe is passed, the final timepoint will
+            be set to the final timepoint in the dataframe.
+        t_steps : int
+            Number of timesteps to calculate during integration
+        random_seed : int
+            Random seed to be used by samplers
         '''
         
-        '''
-        self.df = self._df_check(dataframe)
-
-        #time steps for numerical integration
-        days=max(np.amax(self.df.loc['virus']['time']),np.amax(self.df.loc['host']['time']))
-        self.times = np.arange(0, days, 900.0 / 86400.0) 
-        
-        #indexes to retireve from numerical integration results that match times of data in df
-        self._pred_h_index = np.r_[[np.where(abs(a-self.times) == min(abs(a-self.times)))[0][0] for a in self.df.loc['host']['time']]]
-        self._pred_v_index = np.r_[[np.where(abs(a-self.times) == min(abs(a-self.times)))[0][0] for a in self.df.loc['virus']['time']]]
-        #stored values for R2 and chi calculations
-        self._ha = np.array(self.df.loc['host']['abundance'])
-        self._hu = np.array(self.df.loc['host']['uncertainty'])
-        self._va = np.array(self.df.loc['virus']['abundance'])
-        self._vu = np.array(self.df.loc['virus']['uncertainty'])
-        '''
         _is = {}#initial states
         self.random_seed = random_seed
         
         #parameter assignment
         #pnames is referenced by multilpe functions
-        if parameter_names:
-            self._pnames = parameter_names
-        else:
-            self._pnames = kwargs['parameter_names']
-        if state_names:
-            self._snames = state_names
-        else:
-            self._snames = kwargs['state_names']
+        self._pnames = parameter_names
+        self._snames = state_names
         
         self.parameters = {el:None for el in self._pnames}
-        self.istates = {el:None for el in self._snames} #initial states
+        self.istates = {el:0 for el in self._snames} #initial states
         
         _ps = {} #parameters
         for el in kwargs:
@@ -216,11 +204,11 @@ class ModelFramework():
         
         self._model = ODE
         
-        self._state_summations = state_summations
-        if self._state_summations:
-            self._summations_index = self._get_summation_index()
+        #check to see if ODE state variables must be summed after each integration
+        if state_summations:
+            self._summations_index,self._summation_snames,self._sumkeep = self._get_summation_index(state_summations)
         else:
-            self._summations_index = None
+            self._summations_index,self._summation_snames,self._sumkeep = None,None,None
         #self._samples = self.df.loc['host']['abundance'].shape[0] + self.df.loc['virus']['abundance'].shape[0]
 
         self.df = None
@@ -289,36 +277,64 @@ class ModelFramework():
 
         return(df)
 
-    def _get_summation_index(self):
-        sumpop_sumi = {}
-        for sumpop in self._state_summations:
-            _t = []
-            for el in self._snames:
-                if el in self._state_summations[sumpop]:
-                    _t.append(True)
+    def _get_summation_index(self,summation_mapping):
+        '''
+        This funcitons maps which indices need to be summed after integration into
+        a dictionary. For example, if there are state variables a,b and c in the ODE,
+        being fit to data of a+b and c, then state variables a and b must be summed
+        after each integration. passing a summation_mapping of {'ab':['a','b']} 
+        allows for ab to be a summation of varaibles a and b in the ODE.
+        
+        Parameters
+        ----------
+        summation_mapping : dict
+            name of representative state variable mapped to a list of state variables
+
+        Returns
+        -------
+        tuple of index summation map and snames after summation
+        '''
+        sname_i = {sname:i for i,sname in enumerate(self._snames)}
+        isum_summations = {}
+        summed = set()
+        i_newname={}
+        for sumpop in summation_mapping:
+            summation_indices=[] #keep track of all populations to sum together
+            for pop in summation_mapping[sumpop]:
+                if pop in summed:
+                    raise ValueError("{} state varaiable cannot be used in two summations".format(pop))
+                if pop not in self._snames:
+                    raise ValueError("{} state varaiable is not a valid state name".format(pop))
                 else:
-                    _t.append(False)
-            sumpop_sumi[sumpop] = _t
-        return(sumpop_sumi)
+                    summed.add(pop)
+                    summation_indices.append(sname_i[pop])
+            if len(summation_indices) < 1:#error incase users only specified one element for summation
+                raise ValueError("Summation of {} has only {} specifed. Two or more are required for summations".format(sumpop,summation_mapping[sumpop][0]))
+            #we will store the summation in the first index of the array after integration
+            summation_indices.sort()
+            isum=summation_indices[0]
+            i_newname[isum] = sumpop #keep track of the new name for this index
+            isum_summations[isum]=summation_indices#summations of indecies are stored in first index
+        summation_snames=[]
+        summation_keep=[]
+        #now we need redefine the names of the variables after the summation
+        for i,sname in enumerate(self._snames):
+            if i in i_newname:
+                summation_snames.append(i_newname[i])
+                summation_keep.append(i)
+            elif sname not in summed:
+                summation_snames.append(sname)
+                summation_keep.append(i)
+        return(isum_summations,summation_snames,summation_keep)
 
     def get_pnames(self):
         '''returns the names of the parameters used in the current model'''
         return(self._pnames.copy())
 
-    def get_snames(self,after_summation=False,predict_obs=False):
+    def get_snames(self,after_summation=True,predict_obs=False):
         '''returns the names of the state variables used in the current model'''
-        if after_summation and self._state_summations:
-            snames = []
-            summed_pops = []
-            exclude = set()
-            for summed_pop in self._state_summations:
-                exclude = exclude.union(set(self._state_summations[summed_pop]))
-                summed_pops.append(summed_pop)
-            for pop in self._snames:
-                if pop not in exclude:
-                    snames.append(pop)
-            snames.extend(summed_pops)
-            return(snames)
+        if after_summation and self._summations_index:
+            return(self._summation_snames.copy())
         elif predict_obs:
             return(list(self._pred_tindex.keys()))
         else:
@@ -382,9 +398,12 @@ class ModelFramework():
                 raise Exception("{} is an unknown state variable. Acceptable parameters are: {}".format(s,', '.join(self._snames)))
 
     def get_inits(self,as_dict=False):
+        '''
+        returns the initial values used in integration
+        '''
         if as_dict:
             return(self.istates)
-        inits = np.array([self.istates[el] for el in self.get_snames()])
+        inits = np.array([self.istates[el] for el in self._snames])
         return(inits)
     
     #BROKEN!
@@ -523,16 +542,11 @@ class ModelFramework():
 
         #subpopulation summations
         if sum_subpopulations and self._summations_index:
-            summed = []
-            keep = None
-            for sumpop in self._summations_index:
-                summed.append(mod[:,self._summations_index[sumpop]].sum(axis=1))
-                if not keep:
-                    keep = [not el for el in self._summations_index[sumpop]]
-                else:
-                    keep = [el1 and (not el2) for el1,el2 in zip(keep,self._summations_index[sumpop])]
-            
-            mod = np.concatenate([mod[:,keep],np.array(summed).T],axis=1)
+            for sumi in self._summations_index:
+                #storing the summation in representative column
+                mod[:,sumi]=mod[:,self._summations_index[sumi]].sum(axis=1)
+            #we now need to keep summed colums and those not used in summations
+            mod = mod[:,self._sumkeep]
 
         if as_dataframe:#this operation is expensive, avoid during iteration
             df = pd.DataFrame(mod)
@@ -547,7 +561,7 @@ class ModelFramework():
         else:
             if predict_obs:
                 mod_dict = {}
-                for i,sname in enumerate(self.get_snames()):
+                for i,sname in enumerate(self.get_snames(after_summation=sum_subpopulations)):
                     if sname in self._pred_tindex:
                         mod_dict[sname]=mod[:,i][self._pred_tindex[sname]]#getting predicted values
                 return(mod_dict)
@@ -747,42 +761,51 @@ class ModelFramework():
         return(fitdf)
         
 
-    def _arg_copy(self,overwrite=dict()):
-        '''
-        get a copy of all arguemnts used to construct ModelFramework
 
-        Parameters
-        ----------
-        overwrite : dict
-            overwrite arguments with a dictionary mapping argument to values
-        
-        Return
-        ------
-        args
-            dictionary of argument names mapped to 
-        '''
-        args = {}
-        args['parameter_names']=self._pnames
-        args['state_names'] = self._snames
-        #copying inital states and parameters to args
-        for mapping in [self.istates,self.parameters]:
-            for el in mapping:
-                args[el] = mapping[el]
-        args['ODE']=self._model
-        args['t_steps'] = len(self.times)
-        args['t_end'] = self.times[-1]
-        args['state_summations']=self._state_summations
-        if isinstance(self.df,type(None)):
-            args['dataframe']=None
-        else:
-            args['dataframe']=self.df.reset_index()
-        if overwrite:
-            for key in overwrite:
-                args[key] = overwrite[key]
-        return(args)
 
     def copy(self,overwrite=dict()):
-        return(ModelFramework(**self._arg_copy(overwrite)))
+        '''
+        Creates a copy of the current ModelFramework. All attributes are copied automatically. Typically used for
+        creating instances for parallel operations.
+
+        Parameters
+        ---------
+        overwrite : dict
+            A dictionary containing new initial states or parameters
+
+        Returns
+        -------
+        ModelFramework
+        '''
+        #make a new instance of framework
+        newmod = ModelFramework(ODE=self.get_model(),
+                                parameter_names=self._pnames.copy(),
+                                state_names=self._snames.copy(),
+                                    )
+        #we need specifically iterate though parameters to make sure those objects are not being shared between model instances
+        for p in self.parameters:
+            newmod.parameters[p] = self.parameters[p].copy()
+        already_copied = set(['_model','_pnames','_snames','parameters'])
+        for attr in self.__dict__:
+            if attr not in already_copied:
+                if isinstance(self.__dict__[attr],(list,dict,pd.core.frame.DataFrame,np.ndarray)):
+                    newmod.__dict__[attr]=self.__dict__[attr].copy() #deep copy specific datastrucutres to make sure we are not passing by reference
+                else:
+                    newmod.__dict__[attr]=self.__dict__[attr]
+
+        #we now must overwrite any parameters or initial states
+        _ps={}
+        _is={}
+        for el in overwrite:
+            if el in newmod._pnames:
+                _ps[el] = overwrite[el] #overriding
+            if el in newmod._snames:
+                _is[el] = overwrite[el] #overriding dataframe initial states
+        if _ps:
+            newmod.set_parameters(**_ps)
+        if _is:            
+            newmod.set_inits(**_is)
+        return(newmod)
 
 
     def MCMC(self,chain_inits=1,iterations_per_chain=1000,cpu_cores=1,static_parameters=list(),print_report=True):
@@ -838,14 +861,14 @@ class ModelFramework():
                 #sample number of chains lower than median chi
                 initps = fitsurvey[fitsurvey['chi']<fitsurvey['chi'].quantile(q=.05)].sample(chain_inits)
             for i in range(0,chain_inits):
-                args = self._arg_copy(overwrite=initps.iloc[i].to_dict())#get a copy of arguments with parameters overwritten
-                jobs.append([ModelFramework(random_seed=i,**args),MC_args])#setting a new random seed per chain
+                newmodel = self.copy(overwrite=initps.iloc[i].to_dict())#get a copy of arguments with parameters overwritten
+                newmodel.random_seed=i
+                jobs.append([newmodel,MC_args])#setting a new random seed per chain
         else:
-            for inits in chain_inits:
-                args = self._arg_copy()
-                for el in inits:
-                    args[el] = inits[el]#overwritting coppied elements
-                jobs.append([ModelFramework(**args),MC_args])
+            for i,inits in enumerate(chain_inits):
+                newmodel = self.copy(overwrite=inits)
+                newmodel.random_seed=i
+                jobs.append([newmodel,MC_args])
 
         if cpu_cores == 1:
             posterior_list = []
@@ -860,12 +883,12 @@ class ModelFramework():
         posterior = pd.concat(posterior_list)
         posterior.reset_index(drop=True,inplace=True)
         #setting medians
-        p_median = {}
-        for p in self.get_pnames():
-            if p not in static_parameters:
-                p_median[p] = np.exp(np.log(np.array(posterior[p].to_list()).mean(axis=0)))
-        print("Setting parameters to median of posterior")
-        self.set_parameters(**p_median)
+        #p_median = {}
+        #for p in self.get_pnames():
+        #    if p not in static_parameters:
+        #        p_median[p] = np.exp(np.log(np.array(posterior[p].to_list()).mean(axis=0)))
+        #print("Setting parameters to median of posterior")
+        #self.set_parameters(**p_median)
         if print_report:
             p_median= {}
             report=["\nFitting Report\n==============="]
