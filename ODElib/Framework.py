@@ -112,10 +112,10 @@ class parameter:
 
     def __repr__(self):
         '''pretty printing'''
-        outstr = [str(self.val)]
+        outstr = [str(self.val)+'  ']
         if self.dist:
-            outstr.append("\n\t\tdistribution:{}, ".format(self.dist.name))
-            outstr.append("hyperparameters:{}".format(str(self.hp)))
+            outstr.append("(distribution:{}, ".format(self.dist.name))
+            outstr.append("hyperparameters:{})".format(str(self.hp)))
         return(' '.join(outstr))
 
     def get_figure(self,samples=1000,logspace=False):
@@ -183,72 +183,87 @@ class ModelFramework():
             Random seed to be used by samplers
         '''
         
-        _is = {}#initial states
-        self.random_seed = random_seed
-        
-        #parameter assignment
-        #pnames is referenced by multilpe functions
-        self._pnames = parameter_names
-        self._snames = state_names
-        
-        self.parameters = {el:None for el in self._pnames}
-        self.istates = {el:0 for el in self._snames} #initial states
-        
-        _ps = {} #parameters
-        for el in kwargs:
-            if el in self._pnames:
-                _ps[el] = kwargs[el]
-            if el in self._snames:
-                _is[el] = kwargs[el] #overiding dataframe initial states
-        self.set_parameters(**_ps)
-        
+        #_pnames and _snames are essential for all other operations and should never change 
+        self._pnames = tuple(parameter_names)
+        self._snames = tuple(state_names)
+        #_model references the ODE function. Unpacking order of states and parameters
+        #should corrospond to the indicies of _snames and _pnames
         self._model = ODE
         
+        #setting defaults for parameters and inital states
+        self.parameters = {el:None for el in self._pnames}
+        self.istates = {el:0 for el in self._snames} #initial state defaults are zero
+        
+        self.random_seed = random_seed#set the random seed for later
+
         #check to see if ODE state variables must be summed after each integration
         if state_summations:
             self._summations_index,self._summation_snames,self._sumkeep = self._get_summation_index(state_summations)
         else:
-            self._summations_index,self._summation_snames,self._sumkeep = None,None,None
-        #self._samples = self.df.loc['host']['abundance'].shape[0] + self.df.loc['virus']['abundance'].shape[0]
-
-        self.df = None
-
-        if not isinstance(dataframe,type(None)):
-            self.df = self._processdf(dataframe.copy())
-            self.times = np.linspace(0, max(self.df['time']),t_steps)
-            _pred_tindex = {} #stores time index for predicted values
-            for pred in set(self.df.index):
-                if isinstance(self.df.loc[pred]['time'],pd.core.series.Series):
-                    _pred_tindex[pred] = np.r_[[np.where(abs(a-self.times) == min(abs(a-self.times)))[0][0] for a in self.df.loc[pred]['time']]]
-                else:
-                    a = self.df.loc[pred]['time']
-                    _pred_tindex[pred] = np.r_[np.where(abs(a-self.times) == min(abs(a-self.times)))[0][0]]
-            #we must reorder _pred_tindex to match self.snames, then assigned in self
-            self._pred_tindex = {}
-            for sname in self._snames:
-                if sname in _pred_tindex:
-                    self._pred_tindex[sname] = _pred_tindex[sname]
-            #setting the inital values
-            for org,abundance in self.df[self.df['time'] == 0]['abundance'].iteritems():
-                if org not in _is:
-                    _is[org] = np.exp(np.log(abundance))# SETTING INIT TO MEDIAN, OR MEAN IN LOG!
-            self._samples=len(self.df)
-
-        else:
-            self.times = np.linspace(0, t_end, t_steps)
+            self._summations_index,self._summation_snames,self._sumkeep = {},tuple(),tuple()
         
-        self._pnum=0
-        for p in self.parameters:
-            self._pnum += np.count_nonzero(self.parameters[p])
-        self.set_inits(**_is)
-        
-
-    def _processdf(self,df):
+        #data structures for doing fits
         self._obs_logabundance = {}
         self._obs_logsigma = {}
         self._obs_abundance = {}
+
+        if isinstance(dataframe,pd.DataFrame):
+            #we want to copy the dataframe as to not modify what was passed
+            self.df = self._formatdf(dataframe.copy())
+            self.times = np.linspace(0, max(self.df['time']),t_steps)#setup time
+            self._samples=len(self.df)
+            #building dicionaries used in fitting procdure
+            self._pred_tindex,self._obs_logabundance,self._obs_logsigma=self._df_fitsetup()
+        else:
+            self.df=None
+            self._samples=None
+            self.times = np.linspace(0, t_end, t_steps)
+
+        _is = {} #initial states as defined by the user
+        _ps = {} #parameters as defined by the user        
+        #the following identifies inital states and parameters in key word arguments (kwarg)
+        if isinstance(self.df,pd.DataFrame):
+            for org,abundance in self.df[self.df['time'] == 0]['abundance'].iteritems():
+                if org not in _is:
+                    _is[org] = abundance
+
+        #we need to iterate over key word arguments to find intial state values and parameter values
+        for el in kwargs:
+            if el in self._pnames:
+                _ps[el] = kwargs[el]
+            if el in self._snames:
+                _is[el] = kwargs[el] #overiding dataframe initial states        
+        self.set_parameters(**_ps)#setting the parameters
+        self.set_inits(**_is)#setting the intial states
+        
+        #store the number of parameters
+        self._pnum=0
+        for p in self.parameters:
+            self._pnum += np.count_nonzero(self.parameters[p])
+        
+
+    def reset_dataframe(self,df):
+        '''
+        refreshes datastrucutres with new dataframe
+        '''
+        self.df = self._formatdf(df.copy())
+        self.times = np.linspace(0, max(self.df['time']),len(self.times))#setup time
+        self._pred_tindex,self._obs_logabundance,self._obs_logsigma=self._df_fitsetup()
+        self._samples=len(self.df)
+        _is = {}
+        if isinstance(self.df,pd.DataFrame):
+            for org,abundance in self.df[self.df['time'] == 0]['abundance'].iteritems():
+                if org not in _is:
+                    _is[org] = abundance
+        self.set_inits(**_is)
+
+    def _formatdf(self,df):
+        '''
+        This operation is aimed taking multilpe differently formated dataframes
+        and returing a single object that is properly formatted
+        '''
         df=df.sort_values(by=['organism','time'])
-        if 'replicate' in df:
+        if 'replicate' in df:#if the dataframe has replicates, calculate log mean and log sigma
             _df = df[['organism','time','abundance']]
             _df['log_abundance'] = np.log(_df['abundance'])
             dfagg = _df.groupby(by=['time','organism']).mean()
@@ -262,20 +277,34 @@ class ModelFramework():
             df = dfagg
         else:
             df = df.set_index('organism')
-            for sname in self._snames:
-                if sname in df.index:
-                    self._obs_abundance[sname] = df.loc[sname]['abundance'].to_numpy()
-                    self._obs_logabundance[sname] = np.log(df.loc[sname]['abundance'].to_numpy())
-                    if sname not in self._obs_logsigma:
-                        if 'log_sigma' in df:
-                            self._obs_logsigma[sname] = df.loc[sname]['log_sigma'].to_numpy()
-                        else:
-                            self._obs_logsigma[sname] = stats.predict_logsigma(sigma = df.loc[sname]['sigma'].to_numpy(),
-                                                                                mean = df.loc[sname]['abundance'].to_numpy()
-                                                                                )
-                                                                                        
-
+            if 'abundance' in df and 'log_abundance' not in df:
+                df['log_abundance'] = np.log(df['abundance'].to_numpy())
+            
+            #should probably do something else here, like error checking
         return(df)
+
+    def _df_fitsetup(self):
+        '''
+        defines datastrucutres needed for efficent fitting during MCMC
+        '''
+        _pred_tindex = {} #stores time index for predicted values
+        for pred in set(self.df.index):
+            if isinstance(self.df.loc[pred]['time'],pd.core.series.Series):
+                _pred_tindex[pred] = np.r_[[np.where(abs(a-self.times) == min(abs(a-self.times)))[0][0] for a in self.df.loc[pred]['time']]]
+            else:
+                a = self.df.loc[pred]['time']
+                _pred_tindex[pred] = np.r_[np.where(abs(a-self.times) == min(abs(a-self.times)))[0][0]]
+        
+        #we now have to store efficent datastrucutres that samplers can use
+        #dictionaries have instant access!
+        _obs_logabundance={}
+        _obs_logsigma={}
+        for sname in self.df.index:
+            _obs_logabundance[sname] = self.df.loc[sname]['log_abundance'].to_numpy()
+            _obs_logsigma[sname] = self.df.loc[sname]['log_sigma'].to_numpy()
+
+        return(_pred_tindex,_obs_logabundance,_obs_logsigma)
+
 
     def _get_summation_index(self,summation_mapping):
         '''
@@ -314,7 +343,7 @@ class ModelFramework():
             summation_indices.sort()
             isum=summation_indices[0]
             i_newname[isum] = sumpop #keep track of the new name for this index
-            isum_summations[isum]=summation_indices#summations of indecies are stored in first index
+            isum_summations[isum]=tuple(summation_indices)#summations of indecies are stored in first index
         summation_snames=[]
         summation_keep=[]
         #now we need redefine the names of the variables after the summation
@@ -325,20 +354,21 @@ class ModelFramework():
             elif sname not in summed:
                 summation_snames.append(sname)
                 summation_keep.append(i)
-        return(isum_summations,summation_snames,summation_keep)
+        #returning tuples because they should never be modified
+        return(isum_summations,tuple(summation_snames),tuple(summation_keep))
 
     def get_pnames(self):
         '''returns the names of the parameters used in the current model'''
-        return(self._pnames.copy())
+        return(list(self._pnames))
 
     def get_snames(self,after_summation=True,predict_obs=False):
         '''returns the names of the state variables used in the current model'''
         if after_summation and self._summations_index:
-            return(self._summation_snames.copy())
+            return(list(self._summation_snames))
         elif predict_obs:
             return(list(self._pred_tindex.keys()))
         else:
-            return(self._snames.copy())
+            return(list(self._snames))
 
 
     def __repr__(self):
@@ -349,8 +379,15 @@ class ModelFramework():
         for p in self.get_pnames():
             outstr.append("\t{} = {}".format(p,self.parameters[p]))
         outstr.append("Initial States:")
-        for s in self.get_snames():
+        for s in self.get_snames(after_summation=False):
             outstr.append("\t{} = {}".format(s,self.istates[s]))
+        if self._summations_index:
+            outstr.append("Current State Summations")
+            snames = self.get_snames(after_summation=False)
+            summed_snames = self.get_snames(after_summation=True)
+            for i in self._summations_index:
+                summed='+'.join([snames[i] for i in self._summations_index[i]])
+                outstr.append("\t{}={}".format(str(summed_snames[i]),summed))
         return('\n'.join(outstr))
 
     def __str__(self):
@@ -385,17 +422,44 @@ class ModelFramework():
     def set_inits(self,**kwargs):
         '''set parameters for the model
         
+
+
         Parameters
         ----------
         **kwargs
             key word arguments, where keys are parameters and args are parameter values. Alternativly, pass **dict
+        
+        Raises
+        ------
+        ValueError
+            ValueError is raised if a initial condition for a summation variable is passed and the summation of
+            the ODE state variables are not equal
         '''
-        sset = set(self._snames) #sets are faster when checking membership!
+        s_set = set(self._snames) #sets are faster when checking membership!
+        ss_set = set(self._summation_snames)
+        checksums = {}#summations we need to check after inits have been set
         for s in kwargs:
-            if s in sset:
+            if s in s_set:
                 self.istates[s] = kwargs[s]
+            elif s in ss_set:
+                checksums[s] = kwargs[s]
             else:
                 raise Exception("{} is an unknown state variable. Acceptable parameters are: {}".format(s,', '.join(self._snames)))
+        if checksums:
+            #getting current intial values
+            inits = self.get_inits()
+            #map the sumation name to the correct inital value
+            sname_i = {el:i for i,el in enumerate(self.get_snames(after_summation=True))}
+            for s in checksums:
+                sumval=checksums[s]#what it should be
+                #statesum is the current summation of the initial values
+                statesum = sum(inits[tuple([self._summations_index[sname_i[s]]])])
+                if sumval != statesum:
+                    sum_sname = np.array(self.get_snames(after_summation=False))
+                    err = ', '.join(sum_sname[[self._summations_index[sname_i[s]]]])
+                    msg="The initial value of {} is specified as {} in the dataframe, but summation of the intial ODE state variables '{}' is {}\nPlease specify correct inital values for ODE state variables"
+                    raise ValueError(msg.format(s,str(sumval),err,statesum))
+
 
     def get_inits(self,as_dict=False):
         '''
@@ -581,7 +645,8 @@ class ModelFramework():
         return(chi)
     
     def get_Rsqrd(self,mod_dict):
-        Rsqrd=stats.Rsqrd(C_dict=mod_dict,O_dict=self._obs_abundance)
+        abundance_dict = {el:np.exp(self._obs_logabundance[el]) for el in self._obs_logabundance}
+        Rsqrd=stats.Rsqrd(C_dict=mod_dict,O_dict=abundance_dict)
         return(Rsqrd)
 
     def get_AIC(self,chi):
@@ -779,8 +844,8 @@ class ModelFramework():
         '''
         #make a new instance of framework
         newmod = ModelFramework(ODE=self.get_model(),
-                                parameter_names=self._pnames.copy(),
-                                state_names=self._snames.copy(),
+                                parameter_names=self._pnames,
+                                state_names=self._snames,
                                     )
         #we need specifically iterate though parameters to make sure those objects are not being shared between model instances
         for p in self.parameters:
@@ -788,7 +853,7 @@ class ModelFramework():
         already_copied = set(['_model','_pnames','_snames','parameters'])
         for attr in self.__dict__:
             if attr not in already_copied:
-                if isinstance(self.__dict__[attr],(list,dict,pd.core.frame.DataFrame,np.ndarray)):
+                if isinstance(self.__dict__[attr],(list,dict,pd.DataFrame,np.ndarray)):
                     newmod.__dict__[attr]=self.__dict__[attr].copy() #deep copy specific datastrucutres to make sure we are not passing by reference
                 else:
                     newmod.__dict__[attr]=self.__dict__[attr]
