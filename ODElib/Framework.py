@@ -6,6 +6,9 @@ from pyDOE2 import lhs
 import matplotlib.pyplot as plt
 from .Statistics import stats,Samplers
 
+import warnings
+
+
 def rawstats(pdseries):
     '''calculates raw median and standard deviation of posterior'''
     log_mean = np.log(pdseries).mean()
@@ -279,7 +282,9 @@ class ModelFramework():
             df = df.set_index('organism')
             if 'abundance' in df and 'log_abundance' not in df:
                 df['log_abundance'] = np.log(df['abundance'].to_numpy())
-            
+            if 'log_sigma' not in df:
+                df['log_sigma'] = 1
+                warnings.warn("log_sigma not found, setting log variance to 1")
             #should probably do something else here, like error checking
         return(df)
 
@@ -422,8 +427,6 @@ class ModelFramework():
     def set_inits(self,**kwargs):
         '''set parameters for the model
         
-
-
         Parameters
         ----------
         **kwargs
@@ -873,7 +876,7 @@ class ModelFramework():
         return(newmod)
 
 
-    def MCMC(self,chain_inits=1,iterations_per_chain=1000,cpu_cores=1,static_parameters=list(),print_report=True):
+    def MCMC(self,chain_inits=1,iterations_per_chain=1000,cpu_cores=1,static_parameters=list(),print_report=True,fitsurvey_samples=1000):
         '''Launches Markov Chain Monte Carlo
 
         A Markov Chain Monte Carlo fitting protocol is used to find best fits. Note that chains can only be computed
@@ -916,7 +919,7 @@ class ModelFramework():
         #where integration does not fail by calling fit_survey
         if isinstance(chain_inits,int):
             #quickly explore parameter space using LHS
-            fitsurvey = self.fit_survey(cpu_cores=cpu_cores)
+            fitsurvey = self.fit_survey(cpu_cores=cpu_cores,samples=fitsurvey_samples)
             #removing parameter draws that cause integration failures
             fitsurvey.dropna(inplace=True)
             if fitsurvey.empty:#fit survey is empty (due to no ps to sample or VERY bad priors)
@@ -954,6 +957,7 @@ class ModelFramework():
         #        p_median[p] = np.exp(np.log(np.array(posterior[p].to_list()).mean(axis=0)))
         #print("Setting parameters to median of posterior")
         #self.set_parameters(**p_median)
+        return(posterior)
         if print_report:
             p_median= {}
             report=["\nFitting Report\n==============="]
