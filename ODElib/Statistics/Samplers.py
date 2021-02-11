@@ -68,23 +68,20 @@ def MetropolisHastings(modelframework,nits=1000,burnin=None,static_parameters=se
     tupple : pall, likelihoods, iterations
         host and virus counts
     '''
+    #set the random seed for this chain
+    np.random.seed(modelframework.random_seed)
     #unpacking parameters
     pnames = modelframework.get_pnames()
-    ar,ic = 0.0,0
-    ars, likelihoods = np.r_[[]], np.r_[[]]
-    
     
     reject = set(static_parameters)
     
-    ps=modelframework.get_parameters(asdict=True)
+    ps=modelframework.get_parameters(as_dict=True)
     pname_oldpar = {}#stores old parameters (mapping of pname to value), also implies which parameters should be walking
     for p in ps:
         if p not in reject:
-            pname_oldpar[p] = ps[p]
+            pname_oldpar[p] = ps[p] #copy the value only
             
-    #npars = len(pars)
-    #opt = np.ones(npars)
-    #stds = np.zeros(npars) + 0.05
+
     #defining the number of iterations
     iterations = np.arange(1, nits, 1)
     if not burnin:
@@ -94,6 +91,9 @@ def MetropolisHastings(modelframework,nits=1000,burnin=None,static_parameters=se
     chi = modelframework.get_chi(modcalc)
     pall = []
     chis=[]
+    its=[]
+    ars=[]
+    acceptance_ratio = []
     #print report and update output
     pits = int(nits/10)
     if print_progress:
@@ -103,32 +103,48 @@ def MetropolisHastings(modelframework,nits=1000,burnin=None,static_parameters=se
         for p in pname_oldpar:
             modelframework.parameters[p].rwalk()
         modcalc = modelframework.integrate(predict_obs=True,as_dataframe=False)
-        chinew = modelframework.get_chi(modcalc)
+        chinew = modelframework.get_chi(modcalc)#calculate goodness of fit
+        #priors
+        priors_old = np.prod(np.array([modelframework.parameters[p].pdf(pname_oldpar[p]) for p in pname_oldpar]))
+        priors_new = np.prod(np.array([modelframework.parameters[p].pdf() for p in pname_oldpar]))
         
-        #test = [p+'='+str(modelframework.parameters[p].val) for p in modelframework.parameters]
-        #test = ['chi={}'.format(chinew)]+test
-        #print (' '.join(test))
-
+        #likelihoods
+        #likelihood_old=np.exp(-chi)
+        #likelihood_new=np.exp(-chinew)
+        
+        #likelihood ratio
+        likelihooratio= np.exp(-chinew+chi)
+        acc = np.exp(np.log(likelihooratio)+np.log(priors_new/priors_old))
         #likelihoods = np.append(likelihoods, chinew)
-        if np.exp(chi-chinew) > np.random.rand():  # KEY STEP
+        if acc > np.random.rand():  # KEY STEP
             chi = chinew
-            if it > burnin:  # only store the parameters if you've gone through the burnin period
-                pall.append(modelframework.get_parameters(asdict=True))#stores current parameter set as dictionary
-                chis.append(chi)
-                ar = ar + 1.0  # acceptance ratio
-                ic = ic + 1  # total count
+            #storing current parameters as old
+            ps=modelframework.get_parameters(as_dict=True)
+            for p in pname_oldpar:
+                pname_oldpar[p]=ps[p]
+            #this iteration was accepted
+            ars.append(1)
         else: #if chi gets worse, reassign old parameters
             modelframework.set_parameters(**pname_oldpar)#reassigning parameter values
-        if (it % pits == 0) and print_progress:
-            print(it,';', round(chi,2),';', ar/pits)
-            ars = np.append(ars, ar/pits)
-            ar = 0.0
-    likelihoods = likelihoods[burnin:]
-    iterations = iterations[burnin:]
+            #this iteration was rejected
+            ars.append(0)
+
+        if it > burnin:  # only store the parameters if you've gone through the burnin period
+            pall.append(modelframework.get_parameters(as_dict=True))#stores current parameter set as dictionary
+            chis.append(chi)
+            its.append(it)
+            acceptance_ratio.append(np.array(ars).mean())
+            #ar = ar + 1.0  # acceptance ratio
+            #ic = ic + 1  # total count
+        
+    #likelihoods = likelihoods[burnin:]
+    #iterations = iterations[burnin:]
     #pall = pall[:,:ic]
     #print_posterior_statistics(pall,pnames)
     df = pd.DataFrame(pall)
     df['chi']=chis
+    df['iteration']=its
+    df['acceptance_ratio'] = acceptance_ratio
     for p in static_parameters:
         if isinstance(modelframework.parameters[p],np.ndarray):
             df[p] = [modelframework.parameters[p] for el in range(0,len(df))]
