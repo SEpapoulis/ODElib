@@ -79,7 +79,7 @@ class parameter:
         self.name=name
         self._dim = self.val.shape #shape of val
         
-    def valprob(self,val=None):
+    def pdf(self,val=None):
         if self.dist:
             if val:
                 return(self.dist.pdf(val,**self.hp))
@@ -88,18 +88,19 @@ class parameter:
         else:
             return(1.0)
             
-    def rwalk(self,std=.1):
+    def rwalk(self,std=.05):
         '''
         STEP SIZE SHOULD BE TUNED FOR ACCEPTANCE RATIO OF 30%-50%
         '''
         stds=np.full(self._dim,std)
         #self.val = np.exp(np.log(self.val)+np.random.normal(0,stds))
         if self.dist:
-            logp=self.dist.logcdf(self.val,**self.hp)
+            #logp=self.dist.logcdf(self.val,**self.hp)
             #here, we are taking the logcdf, adding a random var,
             #then exp to get ready for percent point function
-            pp = np.exp(logp+np.random.normal(0,stds))
-            self.val=self.dist.ppf(pp,**self.hp)
+            #pp = np.exp(logp+np.random.normal(0,stds))
+            #self.val=self.dist.ppf(pp,**self.hp)
+            self.val = np.exp(np.log(self.val)+np.random.normal(0,stds))
         else:
             #unconstrained random walk
             self.val = np.exp(np.log(self.val)+np.random.normal(0,stds))
@@ -514,12 +515,12 @@ class ModelFramework():
         '''
         return(self._model)
 
-    def get_parameters(self,asdict=False,**kwargs):
+    def get_parameters(self,as_dict=False,**kwargs):
         '''return the parameters needed for integration
         
         Parameters
         ----------
-        asdict : bool, optional
+        as_dict : bool, optional
             If true, return dict with parameter names mapped to values
         kwargs: optional
             pass a mapping of parameters to be packages for value return
@@ -528,7 +529,7 @@ class ModelFramework():
         parameters
             numpy array of parameters ready for odeint or dict of parameters
         '''
-        if asdict:
+        if as_dict:
             ps = {}
             for p in self.get_pnames():
                 if p in kwargs:
@@ -876,7 +877,7 @@ class ModelFramework():
         return(newmod)
 
 
-    def MCMC(self,chain_inits=1,iterations_per_chain=1000,cpu_cores=1,static_parameters=list(),print_report=True,fitsurvey_samples=1000):
+    def MCMC(self,chain_inits=1,iterations_per_chain=1000,cpu_cores=1,static_parameters=list(),print_report=True,fitsurvey_samples=1000,sd_fitdistance=3.0):
         '''Launches Markov Chain Monte Carlo
 
         A Markov Chain Monte Carlo fitting protocol is used to find best fits. Note that chains can only be computed
@@ -890,11 +891,17 @@ class ModelFramework():
             will be used as the intial values for the Markov Chains, where the length of the list/dataframe implies the
             number of chains to start
         iterations_per_chain : int
-            number of iterations to perform during MCMC chain
+            number of iterations to perform during MCMC chain. Default = 1000
         cpu_cores : int
             number of cores used in fitting, Default = 1
         print_report : bool
             Print a basic
+        static_parameters : list, optional
+            A list of parameters that do not change during MCMC fitting
+        fitsurvey_samples : int
+            The number of samples to take from multidimensional to search for good inital fits. Default = 1000
+        sd_fitdistance : float
+            The number of standard deviations away from data that is acceptable as an initial fit. Default = 3.0
 
         Returns
         -------
@@ -925,9 +932,12 @@ class ModelFramework():
             if fitsurvey.empty:#fit survey is empty (due to no ps to sample or VERY bad priors)
                 #create a dummy datastrucutre so arguments are not overwritten
                 initps=pd.DataFrame([[]]*chain_inits)
+                warnings.warn("Pre-sampling of Multidimentional space failed")
             else:
-                #sample number of chains lower than median chi
-                initps = fitsurvey[fitsurvey['chi']<fitsurvey['chi'].quantile(q=.05)].sample(chain_inits)
+                #calculating threshold based on standard deviations away
+                calc = {sname:np.exp(self._obs_logabundance[sname]+sd_fitdistance*self._obs_logsigma[sname]) for sname in self._obs_logabundance}
+                cutchi = self.get_chi(calc)
+                initps = fitsurvey[fitsurvey['chi']<cutchi].sample(chain_inits) #only sample acceptable fits
             for i in range(0,chain_inits):
                 newmodel = self.copy(overwrite=initps.iloc[i].to_dict())#get a copy of arguments with parameters overwritten
                 newmodel.random_seed=i
@@ -957,7 +967,7 @@ class ModelFramework():
         #        p_median[p] = np.exp(np.log(np.array(posterior[p].to_list()).mean(axis=0)))
         #print("Setting parameters to median of posterior")
         #self.set_parameters(**p_median)
-        return(posterior)
+        #return(posterior)
         if print_report:
             p_median= {}
             report=["\nFitting Report\n==============="]
