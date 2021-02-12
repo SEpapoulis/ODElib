@@ -1,2 +1,3 @@
-from .Framework import ModelFramework
-from . import Statistics
+from ODElib.Framework import ModelFramework,parameter
+
+from scipy.stats import norm

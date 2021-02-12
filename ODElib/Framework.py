@@ -2,9 +2,8 @@ import pandas as pd
 import numpy as np
 from scipy.integrate import odeint
 import multiprocessing
-from pyDOE2 import lhs
 import matplotlib.pyplot as plt
-from .Statistics import stats,Samplers
+from ODElib.Statistics import stats,Samplers
 
 import warnings
 
