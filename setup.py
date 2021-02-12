@@ -18,7 +18,7 @@ setup(name='ODElib',
       author='Spiridon Papoulis',
       author_email='spapouli@vols.utk.edu',
       url='https://github.com/SEpapoulis/ODElib',
-      packages=['ODElib'],
+      packages=['ODElib','ODElib.Statistics'],
       license='GPL-3.0 License',
       install_requires=requirements,
       python_requires='>=3.7'
