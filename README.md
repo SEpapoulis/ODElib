@@ -9,16 +9,16 @@ ODElib is a python module aimed at expediting the analysis of biological systems
 Python >=3.7 is required to run ODElib  
 
 ODElib can be installed by cloning the repo and installing:  
-`cd /dir/you/want`
-`git clone https://github.com/SEpapoulis/ODElib.git`
-`cd ODElib/`
-`pip install .`
+`cd /dir/you/want`  
+`git clone https://github.com/SEpapoulis/ODElib.git`  
+`cd ODElib/`  
+`pip install .`  
 
 Or you can directly install with pip:  
 `pip install git+https://github.com/SEpapoulis/ODElib#egg=ODElib`  
 
 ## Uninstall
-`pip uninstall ODElib`
+`pip uninstall ODElib`  
 
 ODElib is in beta, please submit any issues to github!  
 
