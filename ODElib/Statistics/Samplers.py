@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 from pyDOE2 import lhs
-from .. import Framework #we need this for isinstance
+
 
 def sample_lhs(parameter_dict,samples):#,**kwargs):
         '''Sample parameter space using a Latin Hyper Cube sampling scheme
@@ -28,8 +28,6 @@ def sample_lhs(parameter_dict,samples):#,**kwargs):
         total_ps = 0
         #count all non-zero parameters
         for p in parameter_dict:
-            if not isinstance(parameter_dict[p],Framework.parameter):
-                raise TypeError()
             nump = np.count_nonzero(parameter_dict[p].val)
             total_ps+=nump
         lhd = lhs(total_ps, samples=samples)#sample in multidimentional space
