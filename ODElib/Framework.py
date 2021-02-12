@@ -16,12 +16,12 @@ def rawstats(pdseries):
     std = ((np.exp(log_std**2)-1)*np.exp(2*log_mean+log_std**2.0))**0.5
     return(median,std)
 
-def Chain_worker(model,argdict):
+def _Chain_worker(model,argdict):
     '''Function called by pool for parallized fitting'''
     posterior = Samplers.MetropolisHastings(model,**argdict)
     return(posterior)
 
-def Equilibrium_worker(model,parameter_list=list()):
+def _Equilibrium_worker(model,parameter_list=list()):
     '''
     Currently, this worker is not smart enough to determine if the system has reached equilibrium yet or not
     '''
@@ -38,7 +38,7 @@ def Equilibrium_worker(model,parameter_list=list()):
     return(df)
 
 
-def Fit_worker(model,parameter_list=list()):
+def _Fit_worker(model,parameter_list=list()):
     fits = []
     for ps in parameter_list:
         modcalc = model.integrate(parameters = (ps,),predict_obs=True,as_dataframe=False)
@@ -60,7 +60,7 @@ class parameter:
     Parameters
     ----------
     initials : float
-        initial value of the parameter
+        initial value of the parameter. If not specified, one is drawn
     stats_gen : scipy.stats.rv_continuous or scipy.stats.rv_discrete
         An instance of a scipy.stats.rv_continuous or scipy.stats.rv_discrete that can
         be call typical statistical functions (pdf/pmf, cdf, ppf, ect.).
@@ -71,13 +71,26 @@ class parameter:
         the name of the parameter
     
     '''
-    def __init__(self,initials,stats_gen=None,hyperparameters=None,name=None):
-        self.val = np.array(initials) #store values as ndarray
+    def __init__(self,initials=None,stats_gen=None,hyperparameters=None,name=None):
+        
         self.dist=stats_gen #scipy distribution
         self.hp=hyperparameters #store hyperparameters for shaping dist
         self.name=name
         self._dim = self.val.shape #shape of val
-        
+        if initials:
+            self.val = np.array(initials) #store values as ndarray
+        else:
+            self.val=self.dist.rvs(**self.hp)
+    
+    def fit(self,data):
+        '''
+        fits distribution to data and assigns hyperparameters
+        '''
+        shapeargs =self.dist.shapes.split(',')+['loc','scale']
+        vals=self.dist.fit(data)
+        for i,arg in shapeargs:
+            self.hp[arg] = vals[i]
+    
     def pdf(self,val=None):
         if self.dist:
             if val:
@@ -137,6 +150,7 @@ class parameter:
 
     def __str__(self):
         return(self.__repr__())
+
     def copy(self):
         return(parameter(initials=self.val,
                         stats_gen=self.dist,
@@ -742,9 +756,9 @@ class ModelFramework():
         if cpu_cores ==1:
             results = []
             for job in jobs:
-                results.append(Fit_worker(job[0],job[1]))
+                results.append(_Fit_worker(job[0],job[1]))
         else:                
-            results = self._parallelize(Fit_worker,jobs,cores=cpu_cores)
+            results = self._parallelize(_Fit_worker,jobs,cores=cpu_cores)
         results = pd.concat(results)
         return(results)
 
@@ -780,9 +794,9 @@ class ModelFramework():
         if cpu_cores ==1:
             results = []
             for job in jobs:
-                results.append(Equilibrium_worker(job[0],job[1]))
+                results.append(_Equilibrium_worker(job[0],job[1]))
         else:                
-            results = self._parallelize(Equilibrium_worker,jobs,cores=cpu_cores)
+            results = self._parallelize(_Equilibrium_worker,jobs,cores=cpu_cores)
         results = pd.concat(results)
         return(results)
         #return(df)
@@ -819,9 +833,9 @@ class ModelFramework():
         if cpu_cores ==1:
             results = []
             for job in jobs:
-                results.append(Fit_worker(job[0],job[1]))
+                results.append(_Fit_worker(job[0],job[1]))
         else:                
-            results = self._parallelize(Fit_worker,jobs,cores=cpu_cores)
+            results = self._parallelize(_Fit_worker,jobs,cores=cpu_cores)
         fits=[]
         for workerfit in results:
             fits.extend(workerfit)
@@ -952,7 +966,7 @@ class ModelFramework():
             for job in jobs:
                 posterior_list.append(Samplers.MetropolisHastings(job[0],**job[1]))
         else:
-            posterior_list=self._parallelize(Chain_worker,jobs,cpu_cores)
+            posterior_list=self._parallelize(_Chain_worker,jobs,cpu_cores)
         
         #annotated each posterior dataframe with a chain number
         for i in range(0,len(posterior_list)):
@@ -1068,7 +1082,7 @@ class ModelFramework():
             states = self.get_snames(predict_obs=True)
         rplt = (len(states)%2+len(states)) /2
         f,ax = plt.subplots(int(rplt),2,figsize=[9,4.5])
-        mod = self.integrate()
+        mod = self.integrate(as_dataframe=False)
         for i,state in enumerate(states):
             if state in self.df.index:
                 ax[i].errorbar(self.df.loc[state]['time'],
