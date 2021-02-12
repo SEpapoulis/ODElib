@@ -19,7 +19,7 @@ setup(name='ODElib',
       author_email='spapouli@vols.utk.edu',
       url='https://github.com/SEpapoulis/ODElib',
       packages=['ODElib'],
-      license='GPL-3.0 License'
+      license='GPL-3.0 License',
       install_requires=requirements,
       python_requires='>=3.7'
      )
