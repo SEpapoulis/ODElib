@@ -60,7 +60,8 @@ class parameter:
     Parameters
     ----------
     initials : float
-        initial value of the parameter. If not specified, one is drawn
+        initial value of the parameter. If not specified, one is drawn. If a parameter
+        needs to be an array, it must be specified here.
     stats_gen : scipy.stats.rv_continuous or scipy.stats.rv_discrete
         An instance of a scipy.stats.rv_continuous or scipy.stats.rv_discrete that can
         be call typical statistical functions (pdf/pmf, cdf, ppf, ect.).
@@ -71,15 +72,17 @@ class parameter:
         the name of the parameter
     
     '''
-    def __init__(self,initials=None,stats_gen=None,hyperparameters=None,name=None):
+    def __init__(self,init_value=None,stats_gen=None,hyperparameters=None,name=None):
         
         self.dist=stats_gen #scipy distribution
         self.hp=hyperparameters #store hyperparameters for shaping dist
         self.name=name
         self._dim = self.val.shape #shape of val
-        if initials:
-            self.val = np.array(initials) #store values as ndarray
+        if init_value:
+            self.val = np.array(init_value) #store values as ndarray
         else:
+            if not self.dist:
+                raise ValueError("You must specify a scipy distribution if not passing a value")
             self.val=self.dist.rvs(**self.hp)
     
     def fit(self,data):
@@ -102,7 +105,7 @@ class parameter:
             
     def rwalk(self,std=.05):
         '''
-        STEP SIZE SHOULD BE TUNED FOR ACCEPTANCE RATIO OF 30%-50%
+        randomly walk the parameter
         '''
         stds=np.full(self._dim,std)
         #self.val = np.exp(np.log(self.val)+np.random.normal(0,stds))
@@ -119,7 +122,7 @@ class parameter:
 
     def has_distribution(self):
         '''
-        If there is a distribution 
+        Return true if the parameter has a distribution
         '''
         if self.dist:
             return(True)
@@ -152,7 +155,7 @@ class parameter:
         return(self.__repr__())
 
     def copy(self):
-        return(parameter(initials=self.val,
+        return(parameter(init_value=self.val,
                         stats_gen=self.dist,
                         hyperparameters=self.hp,
                         name=self.name)
@@ -381,7 +384,18 @@ class ModelFramework():
         return(list(self._pnames))
 
     def get_snames(self,after_summation=True,predict_obs=False):
-        '''returns the names of the state variables used in the current model'''
+        '''returns the names of the state variables used in the current model
+        
+        Parameters
+        ----------
+        after_summation : bool
+            Return the state variables as defined by the state_summations argument.
+            If state_summations was not specified, state names of the ODE are returned.
+            If False, the state names of the ODE are returned regardless of the definitons
+            in state_summations
+        predict_obs : bool
+            Only return state names that have observations in the data
+        '''
         if after_summation and self._summations_index:
             return(list(self._summation_snames))
         elif predict_obs:
@@ -481,6 +495,13 @@ class ModelFramework():
     def get_inits(self,as_dict=False):
         '''
         returns the initial values used in integration
+
+        Parameters
+        ----------
+        as_dict : bool
+            If True, return inital states for ODE as a dictionary mapping state names
+            to the initial values. Otherweise, return as an array according to
+            the index of state_names
         '''
         if as_dict:
             return(self.istates)
@@ -537,6 +558,7 @@ class ModelFramework():
             If true, return dict with parameter names mapped to values
         kwargs: optional
             pass a mapping of parameters to be packages for value return
+
         Return
         ------
         parameters
@@ -602,12 +624,18 @@ class ModelFramework():
         parameters : numpy.array, optional
             ignore stored parameters and use specified
         predict_obs : bool
-            If true, only time points in df will be returned
+            If True, only time points in df will be returned
+        as_dataframe : bool
+            If True, integration results are returned as a dataframe. This operation
+            is expensive and should not be used when being called iterativly
+        sum_subpopulations : bool
+            apply state_summations after integration. If False, integration results
+            are returned without summation. Default True
 
         Returns
         -------
-        tupple : (h, v)
-            host and virus counts
+        integration results as a dataframe or dictionary
+            
         '''
         
         func = self.get_model()
@@ -649,6 +677,7 @@ class ModelFramework():
             return mod
 
     def get_chi(self,mod_dict):
+        '''goodness of fit test'''
         O=[]
         C=[]
         S=[]
