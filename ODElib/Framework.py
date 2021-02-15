@@ -72,19 +72,18 @@ class parameter:
         the name of the parameter
     
     '''
-    def __init__(self,init_value=None,stats_gen=None,hyperparameters=None,name=None):
+    def __init__(self,stats_gen=None,hyperparameters=None,init_value=None,name=None):
         
         self.dist=stats_gen #scipy distribution
         self.hp=hyperparameters #store hyperparameters for shaping dist
         self.name=name
-        self._dim = self.val.shape #shape of val
         if init_value:
             self.val = np.array(init_value) #store values as ndarray
         else:
             if not self.dist:
                 raise ValueError("You must specify a scipy distribution if not passing a value")
-            self.val=self.dist.rvs(**self.hp)
-    
+            self.val=np.array((self.dist.rvs(**self.hp)))
+        self._dim = self.val.shape #shape of val
     def fit(self,data):
         '''
         fits distribution to data and assigns hyperparameters
@@ -1111,7 +1110,7 @@ class ModelFramework():
             states = self.get_snames(predict_obs=True)
         rplt = (len(states)%2+len(states)) /2
         f,ax = plt.subplots(int(rplt),2,figsize=[9,4.5])
-        mod = self.integrate(as_dataframe=False)
+        mod = self.integrate()
         for i,state in enumerate(states):
             if state in self.df.index:
                 ax[i].errorbar(self.df.loc[state]['time'],
