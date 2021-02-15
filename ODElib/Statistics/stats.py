@@ -37,7 +37,7 @@ def chi(O,C,S):
         fit of calculated values, lower values indicate a better fit
     
     '''
-    return( np.sum((O-C)**2 / S**2) )
+    return( np.sum((O-C)**2 / (2*(S**2)) ) )
 
 
 def AIC(chi,num_parameters):

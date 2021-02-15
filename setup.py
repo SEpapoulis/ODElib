@@ -13,7 +13,7 @@ def read(fname):
 requirements = read('requirements.txt').splitlines()
 
 setup(name='ODElib',
-      version='0.1',
+      version='0.1.1',
       description='Python Distribution Utilities',
       author='Spiridon Papoulis',
       author_email='spapouli@vols.utk.edu',
