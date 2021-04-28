@@ -612,6 +612,10 @@ class ModelFramework():
             df[p]=pstatic[p]
         return(df)
 
+    def get_residuals(self):
+        mod = self.integrate(predict_obs=True)
+        res = (mod.abundance - self.df.abundance)
+        return(res)
 
     def integrate(self,inits=None,parameters=None,predict_obs=False,as_dataframe=True,sum_subpopulations=True):
         '''allows option to return model solutions at sample times
@@ -646,6 +650,7 @@ class ModelFramework():
             ps = self.get_parameters()
         else:
             ps = parameters
+
         mod = odeint(func,y0=initials,t=self.times,args=ps)
 
         #subpopulation summations
@@ -978,7 +983,13 @@ class ModelFramework():
                 #calculating threshold based on standard deviations away
                 calc = {sname:np.exp(self._obs_logabundance[sname]+sd_fitdistance*self._obs_logsigma[sname]) for sname in self._obs_logabundance}
                 cutchi = self.get_chi(calc)
-                initps = fitsurvey[fitsurvey['chi']<cutchi].sample(chain_inits) #only sample acceptable fits
+                if sum(fitsurvey['chi']<cutchi) == 0:
+                    raise ValueError("Preliminary sampling found no parameter sets which meet the minimal threshold \n \
+                        Try: \n \
+                             1. Increasing sd_fitdistance \n \
+                             2. Increasing fitsurvey_samples \n \
+                             3. Different priors and / or different parameter guesses")
+                initps = fitsurvey[fitsurvey['chi']<cutchi].sample(chain_inits,replace=True) #only sample acceptable fits
             for i in range(0,chain_inits):
                 newmodel = self.copy(overwrite=initps.iloc[i].to_dict())#get a copy of arguments with parameters overwritten
                 newmodel.random_seed=i
