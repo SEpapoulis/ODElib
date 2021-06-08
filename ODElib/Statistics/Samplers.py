@@ -100,15 +100,16 @@ def MetropolisHastings(modelframework,nits=1000,burnin=None,static_parameters=se
     for it in iterations:
         for p in pname_oldpar:
             modelframework.parameters[p].rwalk()
+            _is = {}
+            for s in modelframework._snames:
+                if s+'0' in pnames:
+                    _is[s] = modelframework.parameters[s+'0'].val
+            modelframework.set_inits(**_is)
         modcalc = modelframework.integrate(predict_obs=True,as_dataframe=False)
         chinew = modelframework.get_chi(modcalc)#calculate goodness of fit
         #priors
         priors_old = np.prod(np.array([modelframework.parameters[p].pdf(pname_oldpar[p]) for p in pname_oldpar]))
         priors_new = np.prod(np.array([modelframework.parameters[p].pdf() for p in pname_oldpar]))
-        
-        #likelihoods
-        #likelihood_old=np.exp(-chi)
-        #likelihood_new=np.exp(-chinew)
         
         #likelihood ratio
         likelihooratio= np.exp(-chinew+chi)
@@ -124,6 +125,11 @@ def MetropolisHastings(modelframework,nits=1000,burnin=None,static_parameters=se
             ars.append(1)
         else: #if chi gets worse, reassign old parameters
             modelframework.set_parameters(**pname_oldpar)#reassigning parameter values
+            _is = {}
+            for s in modelframework._snames:
+                if s+'0' in pnames:
+                    _is[s] = pname_oldpar[s+'0']
+            modelframework.set_inits(**_is)
             #this iteration was rejected
             ars.append(0)
 
@@ -134,7 +140,6 @@ def MetropolisHastings(modelframework,nits=1000,burnin=None,static_parameters=se
             acceptance_ratio.append(np.array(ars).mean())
             #ar = ar + 1.0  # acceptance ratio
             #ic = ic + 1  # total count
-        
     #likelihoods = likelihoods[burnin:]
     #iterations = iterations[burnin:]
     #pall = pall[:,:ic]
