@@ -108,9 +108,10 @@ def MetropolisHastings(modelframework,nits=1000,burnin=None,static_parameters=se
         modcalc = modelframework.integrate(predict_obs=True,as_dataframe=False)
         chinew = modelframework.get_chi(modcalc)#calculate goodness of fit
         #priors
-        priors_old = np.prod(np.array([modelframework.parameters[p].pdf(pname_oldpar[p]) for p in pname_oldpar]))
-        priors_new = np.prod(np.array([modelframework.parameters[p].pdf() for p in pname_oldpar]))
-        
+        a = np.array([modelframework.parameters[p].pdf(pname_oldpar[p]) for p in pname_oldpar])
+        b = np.array([modelframework.parameters[p].pdf() for p in pname_oldpar])
+        priors_old = np.prod(a[a>0])
+        priors_new = np.prod(b[b>0])
         #likelihood ratio
         likelihooratio= np.exp(-chinew+chi)
         acc = np.exp(np.log(likelihooratio)+np.log(priors_new/priors_old))
@@ -150,9 +151,9 @@ def MetropolisHastings(modelframework,nits=1000,burnin=None,static_parameters=se
     df['acceptance_ratio'] = acceptance_ratio
     for p in static_parameters:
         if isinstance(modelframework.parameters[p],np.ndarray):
-            df[p] = [modelframework.parameters[p] for el in range(0,len(df))]
+            df[p] = [modelframework.parameters[p].hp['scale'] for el in range(0,len(df))]
         else:
-            df[p]=modelframework.parameters[p]
+            df[p]=modelframework.parameters[p].hp['scale']
     if df.empty:
         df = pd.DataFrame([[np.nan] * (len(pnames)+3)])
     #df.columns = list(pnames)+['chi','adjR2','Iteration']

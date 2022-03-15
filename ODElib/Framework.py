@@ -480,15 +480,15 @@ class ModelFramework():
             inits = self.get_inits()
             #map the sumation name to the correct inital value
             sname_i = {el:i for i,el in enumerate(self.get_snames(after_summation=True))}
-            for s in checksums:
-                sumval=checksums[s]#what it should be
+            #for s in checksums:
+            #    sumval=checksums[s]#what it should be
                 #statesum is the current summation of the initial values
-                statesum = sum(inits[tuple([self._summations_index[sname_i[s]]])])
-                if sumval != statesum:
-                    sum_sname = np.array(self.get_snames(after_summation=False))
-                    err = ', '.join(sum_sname[[self._summations_index[sname_i[s]]]])
-                    msg="The initial value of {} is specified as {} in the dataframe, but summation of the intial ODE state variables '{}' is {}\nPlease specify correct inital values for ODE state variables"
-                    raise ValueError(msg.format(s,str(sumval),err,statesum))
+            #    statesum = sum(inits[tuple([self._summations_index[sname_i[s]]])])
+            #    if sumval != statesum:
+            #        sum_sname = np.array(self.get_snames(after_summation=False))
+            #        err = ', '.join(sum_sname[[self._summations_index[sname_i[s]]]])
+                    #msg="The initial value of {} is specified as {} in the dataframe, but summation of the intial ODE state variables '{}' is {}\nPlease specify correct inital values for ODE state variables"
+                    #raise ValueError(msg.format(s,str(sumval),err,statesum))
 
 
     def get_inits(self,as_dict=False):
