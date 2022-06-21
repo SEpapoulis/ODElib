@@ -87,10 +87,14 @@ def MetropolisHastings(modelframework,nits=1000,burnin=None,static_parameters=se
     #initial prior
     modcalc = modelframework.integrate(predict_obs=True,as_dataframe=False)
     chi = modelframework.get_chi(modcalc)
+    rsquared = modelframework.get_Rsqrd(modcalc)
+    aic = modelframework.get_AIC(chi)
     pall = []
     chis=[]
     its=[]
     ars=[]
+    rsquareds=[]
+    aics=[]
     acceptance_ratio = []
     #print report and update output
     pits = int(nits/10)
@@ -118,6 +122,8 @@ def MetropolisHastings(modelframework,nits=1000,burnin=None,static_parameters=se
         #likelihoods = np.append(likelihoods, chinew)
         if acc > np.random.rand():  # KEY STEP
             chi = chinew
+            rsquared = modelframework.get_Rsqrd(modcalc)
+            aic = modelframework.get_AIC(chi)
             #storing current parameters as old
             ps=modelframework.get_parameters(as_dict=True)
             for p in pname_oldpar:
@@ -128,7 +134,7 @@ def MetropolisHastings(modelframework,nits=1000,burnin=None,static_parameters=se
             modelframework.set_parameters(**pname_oldpar)#reassigning parameter values
             _is = {}
             for s in modelframework._snames:
-                if s+'0' in pnames:
+                if (s+'0' in pnames) and (s+'0' not in reject):
                     _is[s] = pname_oldpar[s+'0']
             modelframework.set_inits(**_is)
             #this iteration was rejected
@@ -138,6 +144,8 @@ def MetropolisHastings(modelframework,nits=1000,burnin=None,static_parameters=se
             pall.append(modelframework.get_parameters(as_dict=True))#stores current parameter set as dictionary
             chis.append(chi)
             its.append(it)
+            rsquareds.append(rsquared)
+            aics.append(aic)
             acceptance_ratio.append(np.array(ars).mean())
             #ar = ar + 1.0  # acceptance ratio
             #ic = ic + 1  # total count
@@ -147,6 +155,8 @@ def MetropolisHastings(modelframework,nits=1000,burnin=None,static_parameters=se
     #print_posterior_statistics(pall,pnames)
     df = pd.DataFrame(pall)
     df['chi']=chis
+    df['rsquared']=rsquareds
+    df['aic']=aics
     df['iteration']=its
     df['acceptance_ratio'] = acceptance_ratio
     for p in static_parameters:
