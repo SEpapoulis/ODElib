@@ -103,15 +103,15 @@ def MetropolisHastings(modelframework,nits=1000,burnin=None,static_parameters=se
         print('iteration; ' 'error; ' 'acceptance ratio')
     for it in iterations:
         for p in pname_oldpar:
-            print(modelframework.parameters[p])
-            import sys
-            sys.exit()
+            print(p,modelframework.parameters[p])
             modelframework.parameters[p].rwalk()
             _is = {}
             for s in modelframework._snames:
                 if s+'0' in pnames:
                     _is[s] = modelframework.parameters[s+'0'].val
             modelframework.set_inits(**_is)
+        import sys
+        sys.exit()
         modcalc = modelframework.integrate(predict_obs=True,as_dataframe=False)
         chinew = modelframework.get_chi(modcalc)#calculate goodness of fit
         #priors
