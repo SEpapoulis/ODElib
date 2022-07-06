@@ -103,9 +103,9 @@ def MetropolisHastings(modelframework,nits=1000,burnin=None,static_parameters=se
         print('iteration; ' 'error; ' 'acceptance ratio')
     for it in iterations:
         for p in pname_oldpar:
-            pold = modelframework.parameters[p]
+            pold = modelframework.parameters[p].val
             modelframework.parameters[p].rwalk()
-            print(p,np.log(modelframework.parameters[p]) - np.log(pold))
+            print(p,np.log(modelframework.parameters[p].val) - np.log(pold))
             _is = {}
             for s in modelframework._snames:
                 if s+'0' in pnames:
