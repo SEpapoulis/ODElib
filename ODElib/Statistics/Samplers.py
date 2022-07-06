@@ -102,17 +102,16 @@ def MetropolisHastings(modelframework,nits=1000,burnin=None,static_parameters=se
         print('a priori error', chi)
         print('iteration; ' 'error; ' 'acceptance ratio')
     for it in iterations:
+        facs = np.r_[[]]
         for p in pname_oldpar:
             pold = modelframework.parameters[p].val
             modelframework.parameters[p].rwalk()
-            print(p,np.log(modelframework.parameters[p].val) - np.log(pold))
+            facs = np.append(facs,np.log(modelframework.parameters[p].val) - np.log(pold))
             _is = {}
             for s in modelframework._snames:
                 if s+'0' in pnames:
                     _is[s] = modelframework.parameters[s+'0'].val
             modelframework.set_inits(**_is)
-        import sys
-        sys.exit()
         modcalc = modelframework.integrate(predict_obs=True,as_dataframe=False)
         chinew = modelframework.get_chi(modcalc)#calculate goodness of fit
         #priors
@@ -122,7 +121,7 @@ def MetropolisHastings(modelframework,nits=1000,burnin=None,static_parameters=se
         priors_new = np.prod(b[b>0])
         #likelihood ratio
         likelihooratio= np.exp(-chinew+chi)
-        acc = np.exp(np.log(likelihooratio)+np.log(priors_new/priors_old))
+        acc = np.exp(np.log(likelihooratio)+np.log(priors_new/priors_old)+np.sum(facs))
         #likelihoods = np.append(likelihoods, chinew)
         if acc > np.random.rand():  # KEY STEP
             chi = chinew
