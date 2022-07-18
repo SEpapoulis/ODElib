@@ -376,7 +376,7 @@ class ModelFramework():
                 summation_snames.append(sname)
                 summation_keep.append(i)
         #returning tuples because they should never be modified
-        return(isum_summations,tuple(summation_snames),tuple(summation_keep),tuple(i_newname))
+        return(isum_summations,tuple(summation_snames),tuple(summation_keep),i_newname)
 
     def get_pnames(self):
         '''returns the names of the parameters used in the current model'''
