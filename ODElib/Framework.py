@@ -217,9 +217,9 @@ class ModelFramework():
 
         #check to see if ODE state variables must be summed after each integration
         if state_summations:
-            self._summations_index,self._summation_snames,self._sumkeep = self._get_summation_index(state_summations)
+            self._summations_index,self._summation_snames,self._sumkeep,self_suminds = self._get_summation_index(state_summations)
         else:
-            self._summations_index,self._summation_snames,self._sumkeep = {},tuple(),tuple()
+            self._summations_index,self._summation_snames,self._sumkeep,self_suminds = {},tuple(),tuple(),tuple()
         
         #data structures for doing fits
         self._obs_logabundance = {}
@@ -376,7 +376,7 @@ class ModelFramework():
                 summation_snames.append(sname)
                 summation_keep.append(i)
         #returning tuples because they should never be modified
-        return(isum_summations,tuple(summation_snames),tuple(summation_keep))
+        return(isum_summations,tuple(summation_snames),tuple(summation_keep),tuple(i_newname))
 
     def get_pnames(self):
         '''returns the names of the parameters used in the current model'''
@@ -419,7 +419,7 @@ class ModelFramework():
             summed_snames = self.get_snames(after_summation=True)
             for i in self._summations_index:
                 summed='+'.join([snames[j] for j in self._summations_index[i]])
-                outstr.append("\t{}={}".format(str(summed_snames[i]),summed))
+                outstr.append("\t{}={}".format(str(self._suminds[i]),summed))
         return('\n'.join(outstr))
 
     def __str__(self):
