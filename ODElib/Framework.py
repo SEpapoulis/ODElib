@@ -419,7 +419,7 @@ class ModelFramework():
             summed_snames = self.get_snames(after_summation=True)
             for i in self._summations_index:
                 summed='+'.join([snames[i] for i in self._summations_index[i]])
-                outstr.append("\t{}={}".format(str(summed_snames[i]),summed))
+                outstr.append("\t{}={}".format(str(summed_snames[i-1]),summed))
         return('\n'.join(outstr))
 
     def __str__(self):
@@ -1025,8 +1025,9 @@ class ModelFramework():
             report=["\nFitting Report\n==============="]
             for col in list(self.get_pnames()):
                 median,std = rawstats(posterior[col])
-                report.append("parameter: {}\n\tmedian = {:0.3e}, Standard deviation = {:0.3e}".format(col,median,std))
-                p_median[col]=median
+                if (median !=0.0) and (std !=0.0):
+                    report.append("parameter: {}\n\tmedian = {:0.3e}, Standard deviation = {:0.3e}".format(col,median,std))
+                    p_median[col]=median
             mod = self.integrate(predict_obs=True,as_dataframe=False)
             fs = self.get_fitstats(mod)
             report.append("\nMedian parameter fit stats:")
