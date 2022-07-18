@@ -217,9 +217,9 @@ class ModelFramework():
 
         #check to see if ODE state variables must be summed after each integration
         if state_summations:
-            self._summations_index,self._summation_snames,self._sumkeep,self_suminds = self._get_summation_index(state_summations)
+            self._summations_index,self._summation_snames,self._sumkeep,self._suminds = self._get_summation_index(state_summations)
         else:
-            self._summations_index,self._summation_snames,self._sumkeep,self_suminds = {},tuple(),tuple(),tuple()
+            self._summations_index,self._summation_snames,self._sumkeep,self._suminds = {},tuple(),tuple(),tuple()
         
         #data structures for doing fits
         self._obs_logabundance = {}
