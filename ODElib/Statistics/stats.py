@@ -50,7 +50,7 @@ def Rsqrd(C_dict,O_dict):
     sstot=0
     ssres=0
     for sname in C_dict:
-        ssres += np.sum((C_dict[sname]-O_dict[sname])**2)
+        ssres += np.nansum((C_dict[sname]-O_dict[sname])**2)
         sstot += C_dict[sname].shape[0]*np.var(O_dict[sname])
     return (1 - ssres / sstot)
 
