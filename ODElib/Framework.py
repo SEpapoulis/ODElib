@@ -418,8 +418,8 @@ class ModelFramework():
             snames = self.get_snames(after_summation=False)
             summed_snames = self.get_snames(after_summation=True)
             for i in self._summations_index:
-                summed='+'.join([snames[i] for i in self._summations_index[i]])
-                outstr.append("\t{}={}".format(str(summed_snames[i-1]),summed))
+                summed='+'.join([snames[j] for j in self._summations_index[i]])
+                outstr.append("\t{}={}".format(str(summed_snames[j]),summed))
         return('\n'.join(outstr))
 
     def __str__(self):
