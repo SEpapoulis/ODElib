@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import random as rd
 from scipy.integrate import odeint
 import multiprocessing
 import matplotlib.pyplot as plt
@@ -92,7 +93,8 @@ class parameter:
         vals=self.dist.fit(data)
         for i,arg in shapeargs:
             self.hp[arg] = vals[i]
-    
+
+
     def pdf(self,val=None):
         if self.dist:
             if val:
@@ -693,7 +695,7 @@ class ModelFramework():
                         C=np.concatenate(C,axis=0),
                         S=np.concatenate(S,axis=0))
         return(chi)
-    
+
     def get_Rsqrd(self,mod_dict):
         abundance_dict = {el:np.exp(self._obs_logabundance[el]) for el in self._obs_logabundance}
         Rsqrd=stats.Rsqrd(C_dict=mod_dict,O_dict=abundance_dict)
@@ -715,10 +717,27 @@ class ModelFramework():
         if not prediction_dict:
             prediction_dict = self.integrate(predict_obs=True,as_dataframe=False)
         fs['Chi'] = self.get_chi(prediction_dict)
-        fs['AdjR^2'] = self.get_adjRsqrd(prediction_dict)
+        fs['R^2'] = self.get_Rsqrd(prediction_dict)
         fs['AIC'] = self.get_AIC(fs['Chi'])
         return(fs)
-    
+   
+    # set optimal parameters 
+    def set_best_params(self,posteriors):
+        im = posteriors.loc[posteriors.chi==min(posteriors.chi)].index[0]
+        bestchain = posteriors.iloc[im]["chain#"]
+        posteriors = posteriors[posteriors["chain#"]==bestchain]
+        self.set_parameters(**posteriors.loc[im][self.get_pnames()].to_dict())
+        self.set_inits(**{o:posteriors.loc[im][self.get_pnames()].to_dict()[o+'0'] for o in self._snames})
+
+    #function for plotting uncertainty once model has been run 
+    def plot_uncertainty(self,ax,posteriors,variable,ntimes=100):
+        for a in range(ntimes):
+            im = rd.choice(posteriors.index)
+            self.set_inits(**{o:posteriors.loc[im][self.get_pnames()].to_dict()[o+'0'] for o in self._snames})
+            self.set_parameters(**posteriors.loc[im][self.get_pnames()].to_dict())
+            mod = self.integrate()
+            ax.plot(mod.time,mod[variable],c=str(0.8),lw=1,zorder=1)
+
     #FIX ME?
     def _rand_walk(self,pdict):
         _pdict={}
@@ -1028,10 +1047,11 @@ class ModelFramework():
                 if (median !=0.0) and (std !=0.0):
                     report.append("parameter: {}\n\tmedian = {:0.3e}, Standard deviation = {:0.3e}".format(col,median,std))
                     p_median[col]=median
+            self.set_best_params(posterior)
             mod = self.integrate(predict_obs=True,as_dataframe=False)
             fs = self.get_fitstats(mod)
             report.append("\nMedian parameter fit stats:")
-            report.append("\tChi = {:0.3e}\n\tAdjusted R-squared = {:0.3e}\n\tAIC = {:0.3e}".format(fs['Chi'],fs['AdjR^2'],fs['AIC']))
+            report.append("\tChi = {:0.3e}\n\tR-squared = {:0.3e}\n\tAIC = {:0.3e}".format(fs['Chi'],fs['R^2'],fs['AIC']))
             print('\n'.join(report))
         return(posterior)
 

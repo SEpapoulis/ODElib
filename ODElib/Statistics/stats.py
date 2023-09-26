@@ -42,7 +42,7 @@ def chi(O,C,S):
 
 def AIC(chi,num_parameters):
     '''calcualte Akaike information criterion (AIC) for the model fit'''
-    AIC = -2*np.log(np.exp(-chi)) + 2*num_parameters
+    AIC = -2*(-chi) + 2*num_parameters
     return(AIC)
 
 def Rsqrd(C_dict,O_dict):
