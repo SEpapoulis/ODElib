@@ -8,7 +8,6 @@ from ODElib.Statistics import stats,Samplers
 
 import warnings
 
-
 def rawstats(pdseries):
     '''calculates raw median and standard deviation of posterior'''
     log_mean = np.log(pdseries).mean()
@@ -100,7 +99,8 @@ class parameter:
             if val:
                 return(self.dist.pdf(val,**self.hp))
             else:
-                return(self.dist.pdf(self.val,**self.hp))
+#                return(self.dist.pdf(self.val,**self.hp))
+                return(self.dist.pdf(self.dist.rvs(**self.hp),**self.hp))
         else:
             return(1.0)
             
@@ -727,7 +727,8 @@ class ModelFramework():
         bestchain = posteriors.iloc[im]["chain#"]
         posteriors = posteriors[posteriors["chain#"]==bestchain]
         self.set_parameters(**posteriors.loc[im][self.get_pnames()].to_dict())
-        self.set_inits(**{o:posteriors.loc[im][self.get_pnames()].to_dict()[o+'0'] for o in self._snames})
+        if self._snames[0] + '0' in self.get_pnames():
+            self.set_inits(**{o:posteriors.loc[im][self.get_pnames()].to_dict()[o+'0'] for o in self._snames})
 
     #function for plotting uncertainty once model has been run 
     def plot_uncertainty(self,ax,posteriors,variable,ntimes=100):
@@ -1019,6 +1020,8 @@ class ModelFramework():
                 newmodel.random_seed=i
                 jobs.append([newmodel,MC_args])
 
+        print('working')
+
         if cpu_cores == 1:
             posterior_list = []
             for job in jobs:
@@ -1026,6 +1029,8 @@ class ModelFramework():
         else:
             posterior_list=self._parallelize(_Chain_worker,jobs,cpu_cores)
         
+        print('not working')
+
         #annotated each posterior dataframe with a chain number
         for i in range(0,len(posterior_list)):
             posterior_list[i]['chain#']=i

@@ -37,6 +37,7 @@ def chi(O,C,S):
         fit of calculated values, lower values indicate a better fit
     
     '''
+    #C = np.nan_to_num(C,nan=0,posinf=1e+20,neginf=1e+20)
     return( ( (np.ma.masked_invalid(O)-C)**2 / (2*(S**2)) ).sum() )
 
 
