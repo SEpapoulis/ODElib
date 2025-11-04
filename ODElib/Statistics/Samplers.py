@@ -122,7 +122,7 @@ def MetropolisHastings(modelframework,nits=1000,burnin=None,static_parameters=se
         #likelihood ratio
         print(it,np.exp(-chi))
         likelihooratio= np.exp(chi-chinew)
-        acc = np.exp(np.log(likelihooratio)+np.log(priors_new/priors_old))
+        acc = np.exp(np.log(likelihooratio))
         #likelihoods = np.append(likelihoods, chinew)
         if acc > np.random.rand():  # KEY STEP
             chi = chinew
